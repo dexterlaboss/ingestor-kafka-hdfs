@@ -1,4 +1,3 @@
-
 use::{
     std::env,
     log::info,
@@ -25,6 +24,8 @@ pub struct Config {
     pub hbase_address: String,
 
     pub hdfs_url: String,
+
+    pub namespace: Option<String>,
 }
 
 impl Config {

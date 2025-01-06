@@ -18,7 +18,7 @@ const INCLUDE_TX_FULL_ADDR: &str = "filter-tx-full-include-addr";
 const EXCLUDE_TX_BY_ADDR_ADDR: &str = "filter-tx-by-addr-exclude-addr";
 const INCLUDE_TX_BY_ADDR_ADDR: &str = "filter-tx-by-addr-include-addr";
 
-pub fn block_uploader_app<'a>(version: &'a str, _default_args: &'a DefaultBlockUploaderArgs) -> App<'a, 'a> {
+pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
     return App::new("solana-block-uploader-service")
         .about("Solana Block Uploader Service")
         .version(version)
@@ -148,7 +148,6 @@ pub fn block_uploader_app<'a>(version: &'a str, _default_args: &'a DefaultBlockU
                 .value_name("SECONDS")
                 .validator(is_parsable::<u64>)
                 .takes_value(true)
-                // .default_value(&default_args.cache_timeout)
                 .help("Cache connection timeout"),
         )
         .arg(
@@ -157,7 +156,6 @@ pub fn block_uploader_app<'a>(version: &'a str, _default_args: &'a DefaultBlockU
                 .value_name("DAYS")
                 .validator(|v| is_within_range::<usize, _>(v, 0..=30))
                 .takes_value(true)
-                // .default_value(&default_args.tx_cache_expiration)
                 .help("Number of days before tx cache records expire"),
         )
         .arg(
@@ -165,7 +163,6 @@ pub fn block_uploader_app<'a>(version: &'a str, _default_args: &'a DefaultBlockU
                 .long("cache-address")
                 .value_name("ADDRESS")
                 .takes_value(true)
-                // .default_value(&default_args.cache_address)
                 .help("Address of the cache server"),
         )
         .arg(
@@ -175,40 +172,4 @@ pub fn block_uploader_app<'a>(version: &'a str, _default_args: &'a DefaultBlockU
                 .help("If HBase should skip WAL when writing new data."),
         )
     ;
-}
-
-pub struct DefaultBlockUploaderArgs {
-    pub disable_tx: bool,
-    pub disable_tx_by_addr: bool,
-    pub disable_blocks: bool,
-    pub enable_full_tx: bool,
-    pub use_md5_row_key_salt: bool,
-    pub disable_blocks_compression: bool,
-    pub disable_tx_compression: bool,
-    pub disable_tx_by_addr_compression: bool,
-    pub disable_tx_full_compression: bool,
-    pub enable_full_tx_cache: bool,
-}
-
-impl DefaultBlockUploaderArgs {
-    pub fn new() -> Self {
-        DefaultBlockUploaderArgs {
-            disable_tx: false,
-            disable_tx_by_addr: false,
-            disable_blocks: false,
-            enable_full_tx: false,
-            use_md5_row_key_salt: false,
-            disable_blocks_compression: false,
-            disable_tx_compression: false,
-            disable_tx_by_addr_compression: false,
-            disable_tx_full_compression: false,
-            enable_full_tx_cache: false,
-        }
-    }
-}
-
-impl Default for DefaultBlockUploaderArgs {
-    fn default() -> Self {
-        Self::new()
-    }
 }

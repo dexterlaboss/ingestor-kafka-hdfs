@@ -1,4 +1,4 @@
-name: Build and Release Solana Archival RPC Storage Ingestor
+name: Build and Release Solana block ingestor
 
 on:
   push:

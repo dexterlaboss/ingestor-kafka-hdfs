@@ -1,52 +1,35 @@
-use std::str::FromStr;
-use solana_sdk::instruction::CompiledInstruction;
-use solana_sdk::message::VersionedMessage;
 use {
     crate::{
-        hbase::Error as HBaseError,
-        hbase::HBaseConnection,
+        hbase::{Error as HBaseError, HBaseConnection},
     },
-    serde::{Deserialize, Serialize},
-    solana_binary_encoder::{
-        extract_memos,
-        transaction_status::{
-            TransactionWithStatusMeta,
-            VersionedConfirmedBlock,
-            TransactionByAddrInfo,
-            VersionedTransactionWithStatusMeta,
-            ConfirmedTransactionWithStatusMeta,
-            TransactionStatusMeta,
-        },
-        convert::{
-            generated,
-            tx_by_addr
-        },
-        compression::compress_best,
+    std::{
+        collections::{HashMap, HashSet},
+        str::FromStr,
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        instruction::CompiledInstruction,
+        message::{v0::LoadedAddresses, VersionedMessage},
         pubkey::Pubkey,
         sysvar::is_sysvar_id,
         transaction::{TransactionError, VersionedTransaction},
     },
-    // solana_storage_proto::convert::generated,
+    serde::{Deserialize, Serialize},
+    solana_binary_encoder::{
+        compression::compress_best,
+        convert::{generated, tx_by_addr},
+        extract_memos,
+        transaction_status::{
+            ConfirmedTransactionWithStatusMeta, TransactionByAddrInfo, TransactionStatusMeta,
+            TransactionWithStatusMeta, VersionedConfirmedBlock, VersionedTransactionWithStatusMeta,
+        },
+    },
     extract_memos::extract_and_fmt_memos,
-    // transaction_error::TransactionError,
-    log::{
-        debug,
-        error,
-        info,
-        // warn
-    },
-    std::{
-        // time::Duration,
-        collections::{HashMap, HashSet},
-    },
+    log::{debug, error, info},
     thiserror::Error,
     tokio::task::JoinError,
+    memcache::{Client, MemcacheError},
 };
-use solana_sdk::message::v0::LoadedAddresses;
-use memcache::{Client, MemcacheError};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -55,12 +38,6 @@ pub enum Error {
 
     #[error("I/O Error: {0}")]
     IoError(std::io::Error),
-
-    #[error("Transaction encoded is not supported")]
-    UnsupportedTransactionEncoding,
-
-    #[error("Missing signature")]
-    MissingSignature,
 
     #[error("tokio error")]
     TokioJoinError(JoinError),
@@ -157,10 +134,6 @@ fn slot_to_key(slot: Slot) -> String {
     format!("{slot:016x}")
 }
 
-// fn slot_to_blocks_key(slot: Slot) -> String {
-//     slot_to_key(slot)
-// }
-
 fn slot_to_blocks_key(slot: Slot, use_md5: bool) -> String {
     let slot_hex = slot_to_key(slot);
 
@@ -178,7 +151,7 @@ fn slot_to_tx_by_addr_key(slot: Slot) -> String {
     slot_to_key(!slot)
 }
 
-// A serialized `TransactionInfo` is stored in the `tx` table
+// A serialized `TransactionInfo` that is stored in the `tx` table
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct TransactionInfo {
     slot: Slot, // The slot that contains the block with this transaction in it
@@ -210,7 +183,6 @@ pub struct StoredConfirmedBlockTransaction {
     meta: Option<StoredConfirmedBlockTransactionStatusMeta>,
 }
 
-// #[cfg(test)]
 impl From<TransactionWithStatusMeta> for StoredConfirmedBlockTransaction {
     fn from(value: TransactionWithStatusMeta) -> Self {
         match value {
@@ -219,9 +191,9 @@ impl From<TransactionWithStatusMeta> for StoredConfirmedBlockTransaction {
                 meta: None,
             },
             TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta {
-                                                    transaction,
-                                                    meta,
-                                                }) => Self {
+                transaction,
+                meta,
+            }) => Self {
                 transaction,
                 meta: Some(meta.into()),
             },
@@ -262,12 +234,12 @@ pub const TX_TABLE_NAME: &str = "tx";
 pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
 pub const FULL_TX_TABLE_NAME: &str = "tx_full";
 pub const DEFAULT_MEMCACHE_ADDRESS: &str = "127.0.0.1:11211";
+pub const DEFAULT_MEMCACHE_TIMEOUT_SECS: u64 = 1;
 
 #[derive(Debug)]
 pub struct LedgerStorageConfig {
-    pub read_only: bool,
-    pub timeout: Option<std::time::Duration>,
     pub address: String,
+    pub namespace: Option<String>,
     pub uploader_config: UploaderConfig,
     pub cache_config: LedgerCacheConfig,
 }
@@ -275,9 +247,8 @@ pub struct LedgerStorageConfig {
 impl Default for LedgerStorageConfig {
     fn default() -> Self {
         Self {
-            read_only: false,
-            timeout: None,
             address: DEFAULT_ADDRESS.to_string(),
+            namespace: None,
             uploader_config: UploaderConfig::default(),
             cache_config: LedgerCacheConfig::default(),
         }
@@ -297,7 +268,7 @@ impl Default for LedgerCacheConfig {
         Self {
             enable_full_tx_cache: false,
             address: DEFAULT_MEMCACHE_ADDRESS.to_string(),
-            timeout: Some(std::time::Duration::from_secs(1)),
+            timeout: Some(std::time::Duration::from_secs(DEFAULT_MEMCACHE_TIMEOUT_SECS)),
             tx_cache_expiration: Some(std::time::Duration::from_secs(60 * 60 * 24 * 14)), // 14 days
         }
     }
@@ -368,13 +339,10 @@ pub struct LedgerStorage {
 }
 
 impl LedgerStorage {
+    #![ allow(unused)]
     pub async fn new(
-        read_only: bool,
-        timeout: Option<std::time::Duration>,
     ) -> Self {
         Self::new_with_config(LedgerStorageConfig {
-            read_only,
-            timeout,
             ..LedgerStorageConfig::default()
         })
             .await
@@ -382,22 +350,29 @@ impl LedgerStorage {
 
     pub async fn new_with_config(config: LedgerStorageConfig) -> Self {
         let LedgerStorageConfig {
-            read_only,
-            timeout,
             address,
+            namespace,
             uploader_config,
             cache_config,
         } = config;
         let connection = HBaseConnection::new(
             address.as_str(),
-            read_only,
-            timeout,
+            namespace.as_deref(),
         )
             .await;
 
         let cache_client = if cache_config.enable_full_tx_cache {
-            // Add the "memcache://" prefix programmatically
-            let memcache_url = format!("memcache://{}?protocol=ascii", cache_config.address);
+            let memcache_timeout_secs = cache_config
+                .timeout
+                .map(|t| t.as_secs())
+                .unwrap_or(DEFAULT_MEMCACHE_TIMEOUT_SECS);
+
+            // Add the "memcache://" prefix
+            let memcache_url = format!(
+                "memcache://{}?timeout={}&protocol=ascii",
+                cache_config.address,
+                memcache_timeout_secs
+            );
             Some(Client::connect(memcache_url.as_str()).unwrap())
         } else {
             None
@@ -409,40 +384,6 @@ impl LedgerStorage {
             cache_client,
             enable_full_tx_cache: cache_config.enable_full_tx_cache,
             tx_cache_expiration: cache_config.tx_cache_expiration,
-        }
-    }
-
-    pub async fn write_tx(&self, confirmed_tx: TransactionWithStatusMeta) -> Result<()> {
-        let signature = match &confirmed_tx {
-            TransactionWithStatusMeta::MissingMetadata(transaction) => transaction.signatures.get(0).cloned(),
-            TransactionWithStatusMeta::Complete(versioned_tx_with_meta) => versioned_tx_with_meta.transaction.signatures.get(0).cloned(),
-        };
-
-        match signature {
-            Some(signature) => {
-                let tx_cells = [(signature.to_string(), confirmed_tx.into())];
-                self.connection
-                    .put_protobuf_cells_with_retry::<generated::ConfirmedTransaction>(
-                        self.uploader_config.full_tx_table_name.as_str(),
-                        &tx_cells,
-                        self.uploader_config.use_tx_full_compression,
-                        self.uploader_config.hbase_write_to_wal,
-                    )
-                    .await?;
-
-                let log_output = format!(
-                    "Encoded tx: {}",
-                    signature.to_string(),
-                );
-                info!("{}", log_output);
-
-                Ok(())
-            },
-            None => {
-                let e = Error::MissingSignature;
-                println!("Failed to convert transaction: {}", e.to_string());
-                Err(e)
-            }
         }
     }
 
@@ -512,8 +453,6 @@ impl LedgerStorage {
             }
 
             if self.uploader_config.enable_full_tx && !should_skip_full_tx {
-                // should_skip_tx = true;
-
                 full_tx_cells.push((
                     signature.to_string(),
                     ConfirmedTransactionWithStatusMeta {
@@ -537,7 +476,7 @@ impl LedgerStorage {
                 ));
             }
 
-            if !self.uploader_config.disable_tx /*&& !should_skip_tx*/ {
+            if !self.uploader_config.disable_tx {
                 tx_cells.push((
                     signature.to_string(),
                     TransactionInfo {
@@ -593,8 +532,6 @@ impl LedgerStorage {
             tasks.push(tokio::spawn(async move {
                 for (signature, transaction) in full_tx_cache {
                     if let Some(client) = &cache_client {
-                        // let stored_tx: generated::ConfirmedTransactionWithStatusMeta = transaction.into();
-
                         cache_transaction::<generated::ConfirmedTransactionWithStatusMeta>(
                             &client,
                             &signature,
@@ -649,12 +586,6 @@ impl LedgerStorage {
                .await
                .map(TaskResult::BytesWritten)
                .map_err(TaskError::from)
-                // info!("HBase: finished put_protobuf_cells_with_retry call for tx-by-addr");
-
-                // match result {
-                //     Ok(bytes_written) => Ok(TaskResult::BytesWritten(bytes_written)),
-                //     Err(e) => Err(e),
-                // }
             }));
         }
 
@@ -677,7 +608,6 @@ impl LedgerStorage {
                 Ok(Err(err)) => {
                     debug!("HBase: got error result {:?}", err);
                     if maybe_first_err.is_none() {
-                        // maybe_first_err = Some(Error::HBaseError(err));
                         match err {
                             TaskError::HBaseError(hbase_err) => {
                                 maybe_first_err = Some(Error::HBaseError(hbase_err));
@@ -700,10 +630,6 @@ impl LedgerStorage {
                         TaskResult::CachedTransactions(count) => total_cached_transactions += count,
                     }
                 }
-                // Ok(Ok(bytes)) => {
-                //     info!("HBase: got success result");
-                //     bytes_written += bytes;
-                // }
             }
         }
 
@@ -717,9 +643,6 @@ impl LedgerStorage {
         }
 
         let _num_transactions = confirmed_block.transactions.len();
-
-        // let signature = "2Mh6diFhdKfy5MyJfWv2AWEYe71wdyMGceDGxTmtpsFDUMXptWe3RtEXAef9SCoNJveiEQUMDdeP6UJVDdrQzbdV";
-        // print_ui_amount_for_signature(confirmed_block.clone().into(), signature);
 
         // Store the block itself last, after all other metadata about the block has been
         // successfully stored.  This avoids partial uploaded blocks from becoming visible to
@@ -748,12 +671,7 @@ impl LedgerStorage {
         }
 
         info!("HBase: successfully uploaded block from slot {}", slot);
-        // datapoint_info!(
-        //     "storage-hbase-upload-block",
-        //     ("slot", slot, i64),
-        //     ("transactions", num_transactions, i64),
-        //     ("bytes", bytes_written, i64),
-        // );
+
         Ok(())
     }
 

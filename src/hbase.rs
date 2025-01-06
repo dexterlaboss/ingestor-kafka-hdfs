@@ -1,64 +1,35 @@
-// use thrift::transport::TBufferChannel;
 use {
     solana_binary_encoder::{
-        compression::{compress, compress_best, decompress, CompressionMethod},
+        compression::{
+            compress,
+            compress_best,
+            CompressionMethod,
+        },
     },
     backoff::{future::retry, ExponentialBackoff},
     log::*,
-    std::{
-        // str::FromStr,
-        time::{
-            Duration,
-            // Instant,
-            // SystemTime
-        },
-    },
     thiserror::Error,
-    hbase_thrift::hbase::{BatchMutation, HbaseSyncClient, THbaseSyncClient, TScan},
+    hbase_thrift::hbase::{
+        BatchMutation, HbaseSyncClient, THbaseSyncClient,
+    },
     hbase_thrift::{
-        // BatchMutationBuilder,
         MutationBuilder,
     },
     thrift::{
         protocol::{TBinaryInputProtocol, TBinaryOutputProtocol},
         transport::{TBufferedReadTransport, TBufferedWriteTransport, TIoChannel, TTcpChannel},
     },
-    std::collections::BTreeMap,
-    std::convert::TryInto,
 };
 
 pub type RowKey = String;
 pub type RowData = Vec<(CellName, CellValue)>;
-pub type RowDataSlice<'a> = &'a [(CellName, CellValue)];
 pub type CellName = String;
 pub type CellValue = Vec<u8>;
-pub enum CellData<B, P> {
-    Bincode(B),
-    Protobuf(P),
-}
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("I/O: {0}")]
     Io(std::io::Error),
-
-    #[error("Row not found")]
-    RowNotFound,
-
-    #[error("Row write failed")]
-    RowWriteFailed,
-
-    #[error("Row delete failed")]
-    RowDeleteFailed,
-
-    #[error("Object not found: {0}")]
-    ObjectNotFound(String),
-
-    #[error("Object is corrupt: {0}")]
-    ObjectCorrupt(String),
-
-    #[error("Timeout")]
-    Timeout,
 
     #[error("Thrift")]
     Thrift(thrift::Error),
@@ -81,20 +52,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct HBaseConnection {
     address: String,
-    timeout: Option<Duration>,
+    namespace: Option<String>,
 }
 
 impl HBaseConnection {
     pub async fn new(
         address: &str,
-        _read_only: bool,
-        timeout: Option<Duration>,
+        namespace: Option<&str>,
     ) -> Self {
-        info!("Connecting to HBase at address {}", address.clone().to_string());
+        info!("Connecting to HBase at address {}", address.to_string());
 
         Self {
             address: address.to_string(),
-            timeout,
+            namespace: namespace.map(|ns| ns.to_string()),
         }
     }
 
@@ -112,7 +82,8 @@ impl HBaseConnection {
 
         HBase {
             client,
-            _timeout: self.timeout,
+            // _timeout: self.timeout,
+            namespace: self.namespace.clone(),
         }
     }
 
@@ -151,9 +122,6 @@ impl HBaseConnection {
     }
 }
 
-// type InputProtocol = TBinaryInputProtocol<thrift::transport::ReadHalf<TBufferChannel>>;
-// type OutputProtocol = TBinaryOutputProtocol<thrift::transport::WriteHalf<TBufferChannel>>;
-
 type InputTransport = TBufferedReadTransport<thrift::transport::ReadHalf<TTcpChannel>>;
 type OutputTransport = TBufferedWriteTransport<thrift::transport::WriteHalf<TTcpChannel>>;
 
@@ -162,213 +130,16 @@ type OutputProtocol = TBinaryOutputProtocol<OutputTransport>;
 
 pub struct HBase {
     client: HbaseSyncClient<InputProtocol, OutputProtocol>,
-    _timeout: Option<Duration>,
+    namespace: Option<String>,
 }
 
 impl HBase {
-    /// Get `table` row keys in lexical order.
-    ///
-    /// If `start_at` is provided, the row key listing will start with key.
-    /// Otherwise the listing will start from the start of the table.
-    ///
-    /// If `end_at` is provided, the row key listing will end at the key. Otherwise it will
-    /// continue until the `rows_limit` is reached or the end of the table, whichever comes first.
-    /// If `rows_limit` is zero, this method will return an empty array.
-    pub async fn get_row_keys(
-        &mut self,
-        table_name: &str,
-        start_at: Option<RowKey>,
-        end_at: Option<RowKey>,
-        rows_limit: i64,
-    ) -> Result<Vec<RowKey>> {
-        if rows_limit == 0 {
-            return Ok(vec![]);
+    fn qualified_table_name(&self, table_name: &str) -> String {
+        if let Some(namespace) = &self.namespace {
+            format!("{}:{}", namespace, table_name)
+        } else {
+            table_name.to_string()
         }
-
-        println!("Trying to get row keys in range {:?} - {:?} with limit {:?}", start_at, end_at, rows_limit);
-
-        let mut scan = TScan::default();
-        scan.start_row = start_at.map(|start_key| {
-            start_key.into_bytes()
-        });
-        scan.stop_row = end_at.map(|end_key| {
-            end_key.into_bytes()
-        });
-        scan.columns = None;
-        scan.batch_size = Some(rows_limit as i32);
-        scan.timestamp = None;
-        scan.caching = rows_limit.try_into().ok();
-
-        let scan_id = self.client.scanner_open_with_scan(
-            table_name.as_bytes().to_vec(),
-            scan,
-            BTreeMap::new()
-        )?;
-
-        let mut results: Vec<(RowKey, RowData)> = Vec::new();
-        let mut count = 0;
-        loop {
-            let row_results = self.client.scanner_get_list(
-                scan_id,
-                rows_limit as i32
-            )?;
-            if row_results.is_empty() {
-                break;
-            }
-            for row_result in row_results {
-                let row_key_bytes = row_result.row.unwrap();
-                let row_key = String::from_utf8(row_key_bytes.clone()).unwrap();
-                let mut column_values: RowData = Vec::new();
-                for (key, column) in row_result.columns.unwrap_or_default() {
-                    let column_value_bytes = column.value.unwrap_or_default();
-                    column_values.push((String::from_utf8(key).unwrap(), column_value_bytes.into()));
-                }
-                results.push((row_key, column_values));
-                count += 1;
-                if count >= rows_limit {
-                    break;
-                }
-            }
-            if count >= rows_limit {
-                break;
-            }
-        }
-
-        self.client.scanner_close(scan_id)?;
-
-        Ok(results.into_iter().map(|r| r.0).collect())
-    }
-
-    /// Get latest data from `table`.
-    ///
-    /// All column families are accepted, and only the latest version of each column cell will be
-    /// returned.
-    ///
-    /// If `start_at` is provided, the row key listing will start with key, or the next key in the
-    /// table if the explicit key does not exist. Otherwise the listing will start from the start
-    /// of the table.
-    ///
-    /// If `end_at` is provided, the row key listing will end at the key. Otherwise it will
-    /// continue until the `rows_limit` is reached or the end of the table, whichever comes first.
-    /// If `rows_limit` is zero, this method will return an empty array.
-    pub async fn get_row_data(
-        &mut self,
-        table_name: &str,
-        start_at: Option<RowKey>,
-        end_at: Option<RowKey>,
-        rows_limit: i64,
-    ) -> Result<Vec<(RowKey, RowData)>> {
-        if rows_limit == 0 {
-            return Ok(vec![]);
-        }
-
-        println!("Trying to get rows in range {:?} - {:?} with limit {:?}", start_at, end_at, rows_limit);
-
-        let mut scan = TScan::default();
-
-        scan.start_row = start_at.map(|start_key| {
-            start_key.as_bytes().to_vec()
-        });
-        scan.stop_row = end_at.map(|end_key| {
-            end_key.as_bytes().to_vec()
-        });
-        scan.columns = Some(vec!["x".as_bytes().to_vec()]);
-        scan.batch_size = Some(rows_limit as i32);
-        scan.timestamp = None;
-        scan.filter_string = Some(b"ColumnPaginationFilter(1,0)".to_vec());
-
-        let scan_id = self.client.scanner_open_with_scan(
-            table_name.as_bytes().to_vec(),
-            scan,
-            BTreeMap::new()
-        )?;
-
-        let mut results: Vec<(RowKey, RowData)> = Vec::new();
-        let mut count = 0;
-
-        loop {
-            let row_results = self.client.scanner_get_list(
-                scan_id,
-                rows_limit as i32
-            )?;
-
-            if row_results.is_empty() {
-                break;
-            }
-
-            for row_result in row_results {
-                let row_key_bytes = row_result.row.unwrap();
-                let row_key = String::from_utf8(row_key_bytes.clone()).unwrap();
-                let mut column_values: RowData = Vec::new();
-                for (key, column) in row_result.columns.unwrap_or_default() {
-                    let column_value_bytes = column.value.unwrap_or_default();
-                    column_values.push((String::from_utf8(key).unwrap(), column_value_bytes.into()));
-                }
-                results.push((row_key, column_values));
-                count += 1;
-                if count >= rows_limit {
-                    break;
-                }
-            }
-            if count >= rows_limit {
-                break;
-            }
-        }
-
-        self.client.scanner_close(scan_id)?;
-
-        Ok(results)
-    }
-
-    pub async fn get_single_row_data(
-        &mut self,
-        table_name: &str,
-        row_key: RowKey,
-    ) -> Result<RowData> {
-        println!("Trying to get row data with key {:?} from table {:?}", row_key, table_name);
-
-        let row_result = self.client.get_row_with_columns(
-            table_name.as_bytes().to_vec(),
-            row_key.as_bytes().to_vec(),
-            vec![b"x".to_vec()],
-            BTreeMap::new()
-        )?;
-
-        let first_row_result = &row_result.into_iter()
-            .next()
-            .ok_or(Error::RowNotFound)?;
-
-        let mut result_value: RowData = vec![];
-        if let Some(cols) = &first_row_result.columns {
-            for (col_name, cell) in cols {
-                if let Some(value) = &cell.value {
-                    result_value.push((String::from_utf8(col_name.to_vec()).unwrap().to_string(), value.to_vec()));
-                }
-            }
-        }
-
-        Ok(result_value)
-    }
-
-    pub async fn get_bincode_cell<T>(&mut self, table: &str, key: RowKey) -> Result<T>
-        where
-            T: serde::de::DeserializeOwned,
-    {
-        let row_data = self.get_single_row_data(table, key.clone()).await?;
-        deserialize_bincode_cell_data(&row_data, table, key.to_string())
-    }
-
-    pub async fn get_protobuf_or_bincode_cell<B, P>(
-        &mut self,
-        table: &str,
-        key: RowKey,
-    ) -> Result<CellData<B, P>>
-        where
-            B: serde::de::DeserializeOwned,
-            P: prost::Message + Default,
-    {
-        let row_data = self.get_single_row_data(table, key.clone()).await?;
-        deserialize_protobuf_or_bincode_cell_data(&row_data, table, key)
     }
 
     pub async fn put_bincode_cells<T>(
@@ -450,9 +221,11 @@ impl HBase {
             mutation_batches.push(BatchMutation::new(Some(row_key.as_bytes().to_vec()), mutations));
         }
 
+        let qualified_name = self.qualified_table_name(table_name);
+
         let result = self
             .client
-            .mutate_rows(table_name.as_bytes().to_vec(), mutation_batches, Default::default());
+            .mutate_rows(qualified_name.as_bytes().to_vec(), mutation_batches, Default::default());
 
         match result {
             Ok(_) => Ok(()),
@@ -461,76 +234,8 @@ impl HBase {
                     "HBase: Failed to mutate rows for table '{}': {}",
                     table_name, e
                 );
-                // Map the error to your custom Error type
                 Err(Error::Thrift(e))
             }
         }
-
-        // self.client.mutate_rows(table_name.as_bytes().to_vec(), mutation_batches, Default::default())?;
-        //
-        // Ok(())
     }
-}
-
-pub(crate) fn deserialize_protobuf_or_bincode_cell_data<B, P>(
-    row_data: RowDataSlice,
-    table: &str,
-    key: RowKey,
-) -> Result<CellData<B, P>>
-    where
-        B: serde::de::DeserializeOwned,
-        P: prost::Message + Default,
-{
-    match deserialize_protobuf_cell_data(row_data, table, key.to_string()) {
-        Ok(result) => {
-            return Ok(CellData::Protobuf(result))
-        },
-        Err(err) => match err {
-            Error::ObjectNotFound(_) => {}
-            _ => return Err(err),
-        },
-    }
-    deserialize_bincode_cell_data(row_data, table, key).map(CellData::Bincode)
-}
-
-pub(crate) fn deserialize_protobuf_cell_data<T>(
-    row_data: RowDataSlice,
-    table: &str,
-    key: RowKey,
-) -> Result<T>
-    where
-        T: prost::Message + Default,
-{
-    let value = &row_data
-        .iter()
-        .find(|(name, _)| name == "x:proto")
-        .ok_or_else(|| Error::ObjectNotFound(format!("{table}/{key}")))?
-        .1;
-
-    let data = decompress(value)?;
-    T::decode(&data[..]).map_err(|err| {
-        warn!("Failed to deserialize {}/{}: {}", table, key, err);
-        Error::ObjectCorrupt(format!("{table}/{key}"))
-    })
-}
-
-pub(crate) fn deserialize_bincode_cell_data<T>(
-    row_data: RowDataSlice,
-    table: &str,
-    key: RowKey,
-) -> Result<T>
-    where
-        T: serde::de::DeserializeOwned,
-{
-    let value = &row_data
-        .iter()
-        .find(|(name, _)| name == "x:bin")
-        .ok_or_else(|| Error::ObjectNotFound(format!("{table}/{key}")))?
-        .1;
-
-    let data = decompress(value)?;
-    bincode::deserialize(&data).map_err(|err| {
-        warn!("Failed to deserialize {}/{}: {}", table, key, err);
-        Error::ObjectCorrupt(format!("{table}/{key}"))
-    })
 }

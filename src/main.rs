@@ -1,93 +1,130 @@
-
 use {
     crate::{
-        consumer::KafkaConsumer,
-        producer::KafkaProducer,
+        block_processor::BlockProcessor,
+        cli::block_uploader_app,
         config::Config,
-        cli::{DefaultBlockUploaderArgs, block_uploader_app},
+        decompressor::{Decompressor, GzipDecompressor},
+        file_processor::FileProcessor,
+        file_storage::HdfsStorage,
+        format_parser::{FormatParser, NdJsonParser},
+        ingestor::Ingestor,
         ledger_storage::{
-            LedgerStorage,
-            LedgerStorageConfig,
-            FilterTxIncludeExclude,
-            UploaderConfig,
-            LedgerCacheConfig,
+            FilterTxIncludeExclude, LedgerCacheConfig, LedgerStorage, LedgerStorageConfig, UploaderConfig,
         },
+        message_decoder::{JsonMessageDecoder, MessageDecoder},
+        queue_consumer::{KafkaConfig, KafkaQueueConsumer, QueueConsumer},
+        queue_producer::KafkaQueueProducer,
     },
-    std::sync::Arc,
-    std::{
-        collections::{HashSet},
-    },
-    // solana_binary_encoder::{
-    //     convert::generated,
-    // },
-    solana_sdk::{
-        pubkey::Pubkey,
-    },
+    std::{collections::HashSet, sync::Arc},
+    anyhow::{Context, Result},
     clap::{value_t_or_exit, values_t, ArgMatches},
-    log::{debug, info},
+    log::info,
+    solana_sdk::pubkey::Pubkey,
+    hdfs_native::Client,
+    rdkafka::config::RDKafkaLogLevel,
 };
 
-pub mod consumer;
-pub mod producer;
-pub mod hbase;
-pub mod ledger_storage;
-pub mod config;
-pub mod cli;
+mod block_processor;
+mod cli;
+mod config;
+mod decompressor;
+mod file_storage;
+mod format_parser;
+mod hbase;
+mod ingestor;
+mod ledger_storage;
+mod message_decoder;
+mod file_processor;
+mod queue_consumer;
+mod queue_producer;
+mod record_stream;
 
-/// Create a consumer based on the given configuration.
-// async fn create_consumer<'a>(
-async fn create_consumer(
-    config: Arc<Config>,
-    uploader_config: UploaderConfig,
-    cache_config: LedgerCacheConfig,
-// ) -> KafkaConsumer<'a> {
-) -> KafkaConsumer {
-    info!("Connecting to kafka: {}", &config.kafka_brokers);
+const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-    let kproducer = create_producer(config.clone());
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Parse CLI arguments
+    let cli_app = block_uploader_app(SERVICE_VERSION);
+    let matches = cli_app.get_matches();
 
-    let storage_config = LedgerStorageConfig {
-        read_only: false,
-        timeout: None,
+    // Initialize logging
+    env_logger::init();
+    info!("Starting the Solana block ingestor (Version: {})", SERVICE_VERSION);
+
+    // Process CLI arguments
+    let uploader_config = process_uploader_arguments(&matches);
+    let cache_config = process_cache_arguments(&matches);
+
+    // Load configuration
+    let config = Arc::new(Config::new());
+
+    // Create HDFS client
+    let hdfs_client = Client::new(&config.hdfs_url).context("Failed to create HDFS client")?;
+    let file_storage = HdfsStorage::new(hdfs_client);
+
+    // Create components
+    let decompressor: Box<dyn Decompressor + Send + Sync> = Box::new(GzipDecompressor {});
+    let message_decoder: Arc<dyn MessageDecoder + Send + Sync> = Arc::new(JsonMessageDecoder {});
+    let format_parser: Arc<dyn FormatParser + Send + Sync> = Arc::new(NdJsonParser {});
+
+    // Create ledger storage
+    let ledger_storage_config = LedgerStorageConfig {
         address: config.hbase_address.clone(),
+        namespace: config.namespace.clone(),
         uploader_config: uploader_config.clone(),
         cache_config: cache_config.clone(),
     };
-    let storage = LedgerStorage::new_with_config(storage_config).await;
+    let ledger_storage = LedgerStorage::new_with_config(ledger_storage_config).await;
 
-    KafkaConsumer::new(
+    // Create the block processor
+    let block_processor = BlockProcessor::new(ledger_storage.clone());
+
+    let file_processor = Arc::new(FileProcessor::new(
+        file_storage,
+        format_parser.clone(),
+        block_processor,
+        decompressor,
+    ));
+
+    let kafka_config = KafkaConfig {
+        group_id: config.kafka_group_id.clone(),
+        bootstrap_servers: config.kafka_brokers.clone(),
+        enable_partition_eof: false,
+        session_timeout_ms: 10000,
+        enable_auto_commit: true,
+        auto_offset_reset: "earliest".to_string(),
+        max_partition_fetch_bytes: 10 * 1024 * 1024, // 10 MiB
+        max_in_flight_requests_per_connection: 1,
+        log_level: RDKafkaLogLevel::Debug,
+    };
+
+    // Create the queue consumer
+    let consumer: Box<dyn QueueConsumer + Send + Sync> = Box::new(
+        KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic])
+            .unwrap()
+    );
+
+    // Create the queue producer
+    let kafka_producer = KafkaQueueProducer::new(
         &config.kafka_brokers,
-        &config.kafka_group_id,
-        &[&config.kafka_consume_topic],
-        storage,
-        kproducer,
-        &config.hdfs_url,
-    ).await
+        &config.kafka_produce_error_topic
+    )?;
+
+    // Create the ingestor
+    let mut ingestor = Ingestor::new(
+        consumer,
+        kafka_producer,
+        file_processor,
+        message_decoder,
+    );
+
+    // Run the Ingestor
+    ingestor.run().await?;
+
+    Ok(())
 }
 
-/// Create a producer based on the given configuration.
-fn create_producer(config: Arc<Config>) -> KafkaProducer {
-    KafkaProducer::new(
-        &config.kafka_brokers,
-        &config.kafka_produce_error_topic)
-}
-
-/// Handle the message processing.
-async fn handle_message_receiving(
-    config: Arc<Config>,
-    uploader_config: UploaderConfig,
-    cache_config: LedgerCacheConfig) {
-    debug!("Started consuming messages");
-
-    let kconsumer = create_consumer(
-        config.clone(),
-        uploader_config.clone(),
-        cache_config.clone()
-    ).await;
-
-    kconsumer.consume().await;
-}
-
+/// Process uploader-related CLI arguments
 fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_tx = matches.is_present("disable_tx");
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
@@ -117,8 +154,6 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
             .cloned()
             .collect();
 
-
-
     let filter_tx_by_addr_include_addrs: HashSet<Pubkey> =
         values_t!(matches, "filter_tx_by_addr_include_addr", Pubkey)
             .unwrap_or_default()
@@ -133,14 +168,8 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
             .cloned()
             .collect();
 
-    let tx_full_filter = create_filter(
-        filter_tx_full_exclude_addrs,
-        filter_tx_full_include_addrs
-    );
-    let tx_by_addr_filter = create_filter(
-        filter_tx_by_addr_exclude_addrs,
-        filter_tx_by_addr_include_addrs
-    );
+    let tx_full_filter = create_filter(filter_tx_full_exclude_addrs, filter_tx_full_include_addrs);
+    let tx_by_addr_filter = create_filter(filter_tx_by_addr_exclude_addrs, filter_tx_by_addr_include_addrs);
 
     UploaderConfig {
         tx_full_filter,
@@ -162,6 +191,7 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     }
 }
 
+/// Process cache-related CLI arguments
 fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
     let enable_full_tx_cache = matches.is_present("enable_full_tx_cache");
 
@@ -196,6 +226,7 @@ fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
     }
 }
 
+/// Helper function to create a filter
 fn create_filter(
     filter_tx_exclude_addrs: HashSet<Pubkey>,
     filter_tx_include_addrs: HashSet<Pubkey>,
@@ -216,25 +247,4 @@ fn create_filter(
     } else {
         None
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let default_args = DefaultBlockUploaderArgs::new();
-    let solana_version = solana_version::version!();
-    let cli_app = block_uploader_app(solana_version, &default_args);
-    let matches = cli_app.get_matches();
-
-    let uploader_config = process_uploader_arguments(&matches);
-    let cache_config = process_cache_arguments(&matches);
-
-    env_logger::init();
-
-    info!("Solana block encoder service started");
-
-    let app_config = Arc::new(Config::new());
-
-    handle_message_receiving(app_config, uploader_config, cache_config).await;
-
-    Ok(())
 }
