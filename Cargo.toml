@@ -1,6 +1,6 @@
 [package]
 name = "ingestor-kafka-hdfs"
-version = "2.5.0"
+version = "2.5.1"
 description = "Solana block ingestor service"
 authors = ["Aurimas Narkevicius <aurimas.n@dexterlab.com>"]
 license = "AGPL-3"

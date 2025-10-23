@@ -9,13 +9,13 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     libclang-dev \
     libudev-dev \
     libssl-dev \
+    pkg-config \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-
 RUN USER=root cargo new --bin solana
 WORKDIR /solana
-
 COPY . /solana
 
 RUN cargo build --release
@@ -23,9 +23,10 @@ RUN cargo build --release
 
 FROM rust:1.83-slim-bullseye
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
+    libssl1.1 \
+    ca-certificates \
     wget \
-    && apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
