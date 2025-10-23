@@ -15,17 +15,41 @@ use {
         sysvar::is_sysvar_id,
         transaction::{TransactionError, VersionedTransaction},
     },
+    solana_hash::Hash,
     serde::{Deserialize, Serialize},
-    solana_binary_encoder::{
-        compression::compress_best,
-        convert::{generated, tx_by_addr},
-        extract_memos,
-        transaction_status::{
-            ConfirmedTransactionWithStatusMeta, TransactionByAddrInfo, TransactionStatusMeta,
-            TransactionWithStatusMeta, VersionedConfirmedBlock, VersionedTransactionWithStatusMeta,
-        },
+    solana_storage_utils::compression::compress_best,
+    solana_storage_proto::convert::{entries, tx_by_addr},
+    dexter_storage_proto_tx::convert::{generated},
+    // solana_block_decoder::{
+    //     compression::compress_best,
+    //     convert::{generated, tx_by_addr},
+    //     extract_memos,
+    //     transaction_status::{
+    //         ConfirmedTransactionWithStatusMeta,
+    //         TransactionByAddrInfo,
+    //         TransactionStatusMeta,
+    //         TransactionWithStatusMeta,
+    //         VersionedConfirmedBlock,
+    //         VersionedTransactionWithStatusMeta,
+    //     },
+    // },
+    solana_transaction_status::{
+        // ConfirmedBlock,
+        TransactionStatusMeta,
+        TransactionWithStatusMeta,
+        // VersionedTransactionWithStatusMeta,
+        // Reward,
     },
-    extract_memos::extract_and_fmt_memos,
+    // extract_memos::extract_and_fmt_memos,
+    solana_transaction_status::{
+        extract_memos::extract_and_fmt_memos,
+        ConfirmedTransactionWithStatusMeta,
+        TransactionByAddrInfo,
+        VersionedConfirmedBlock,
+        VersionedTransactionWithStatusMeta,
+        VersionedConfirmedBlockWithEntries,
+        EntrySummary,
+    },
     log::{debug, error, info},
     thiserror::Error,
     tokio::task::JoinError,
@@ -251,6 +275,7 @@ pub const BLOCKS_TABLE_NAME: &str = "blocks";
 pub const TX_TABLE_NAME: &str = "tx";
 pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
 pub const FULL_TX_TABLE_NAME: &str = "tx_full";
+pub const ENTRIES_TABLE_NAME: &str = "entries";
 pub const DEFAULT_MEMCACHE_ADDRESS: &str = "127.0.0.1:11211";
 pub const DEFAULT_MEMCACHE_TIMEOUT_SECS: u64 = 1;
 
@@ -321,6 +346,8 @@ pub struct UploaderConfig {
     pub use_tx_by_addr_compression: bool,
     pub use_tx_full_compression: bool,
     pub hbase_write_to_wal: bool,
+    pub write_block_entries: bool,
+    pub entries_table_name: String,
 }
 
 impl Default for UploaderConfig {
@@ -353,6 +380,8 @@ impl Default for UploaderConfig {
             use_tx_by_addr_compression: true,
             use_tx_full_compression: true,
             hbase_write_to_wal: true,
+            write_block_entries: false,
+            entries_table_name: ENTRIES_TABLE_NAME.to_string(),
         }
     }
 }
@@ -426,6 +455,20 @@ impl LedgerStorage {
         slot: Slot,
         confirmed_block: VersionedConfirmedBlock,
     ) -> Result<()> {
+        // Delegate to entries-aware upload with empty entries to preserve old behavior
+        self.upload_confirmed_block_with_entries(
+            slot,
+            VersionedConfirmedBlockWithEntries { block: confirmed_block, entries: vec![] },
+        )
+        .await
+    }
+
+    pub async fn upload_confirmed_block_with_entries(
+        &self,
+        slot: Slot,
+        confirmed_block_with_entries: VersionedConfirmedBlockWithEntries,
+    ) -> Result<()> {
+        let VersionedConfirmedBlockWithEntries { block: confirmed_block, entries } = confirmed_block_with_entries;
         let mut by_addr: HashMap<&Pubkey, Vec<TransactionByAddrInfo>> = HashMap::new();
 
         info!("HBase: Uploading block {:?} from slot {:?}", confirmed_block.blockhash, slot);
@@ -533,27 +576,29 @@ impl LedgerStorage {
 
             if self.uploader_config.enable_full_tx && !should_skip_full_tx {
                 full_tx_cells.push((
-                    // signature.to_string(),
                     signature_to_tx_full_key(signature, self.uploader_config.hash_tx_full_row_keys),
                     ConfirmedTransactionWithStatusMeta {
                         slot,
-                        tx_with_meta: transaction_with_meta.clone().into(),
+                        // tx_with_meta: transaction_with_meta.clone().into(),
+                        tx_with_meta: convert_to_transaction_with_status_meta(transaction_with_meta.clone()),
                         block_time: confirmed_block.block_time,
-                    }.into()
+                    }
+                    .into(),
                 ));
             }
 
             if self.enable_full_tx_cache
                 && !is_voting
-                && !transaction_with_meta.meta.status.is_err() {
+                && !transaction_with_meta.meta.status.is_err()
+            {
                 full_tx_cache.push((
-                    // signature.to_string(),
                     signature_to_tx_full_key(signature, self.uploader_config.hash_tx_full_row_keys),
                     ConfirmedTransactionWithStatusMeta {
                         slot,
-                        tx_with_meta: transaction_with_meta.clone().into(),
+                        // tx_with_meta: transaction_with_meta.clone().into(),
+                        tx_with_meta: convert_to_transaction_with_status_meta(transaction_with_meta.clone()),
                         block_time: confirmed_block.block_time,
-                    }
+                    },
                 ));
             }
 
@@ -668,6 +713,32 @@ impl LedgerStorage {
                .map(TaskResult::BytesWritten)
                .map_err(TaskError::from)
             }));
+        }
+
+        // Entries upload
+        if self.uploader_config.write_block_entries {
+            if !entries.is_empty() {
+                let conn = self.connection.clone();
+                let entries_table_name = self.uploader_config.entries_table_name.clone();
+                let use_entries_compression = true; // follow blocks/tx default compressed writes
+                let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+                // Convert EntrySummary -> storage proto entries::Entries
+                let entries_cell = (
+                    slot_to_key(slot),
+                    entries::Entries { entries: entries.into_iter().enumerate().map(Into::into).collect() },
+                );
+                tasks.push(tokio::spawn(async move {
+                    conn.put_protobuf_cells_with_retry::<entries::Entries>(
+                        entries_table_name.as_str(),
+                        &[entries_cell],
+                        use_entries_compression,
+                        write_to_wal,
+                    )
+                    .await
+                    .map(TaskResult::BytesWritten)
+                    .map_err(TaskError::from)
+                }));
+            }
         }
 
         let mut _bytes_written = 0;
@@ -898,4 +969,8 @@ fn is_readonly_account(address: &Pubkey, transaction_with_meta: &VersionedTransa
             })
         }
     }
+}
+
+pub(crate) fn convert_to_transaction_with_status_meta(item: VersionedTransactionWithStatusMeta) -> TransactionWithStatusMeta {
+    TransactionWithStatusMeta::Complete(item)
 }

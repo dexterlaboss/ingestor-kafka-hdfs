@@ -1,5 +1,12 @@
 use {
-    solana_binary_encoder::{
+    // solana_block_decoder::{
+    //     compression::{
+    //         compress,
+    //         compress_best,
+    //         CompressionMethod,
+    //     },
+    // },
+    solana_storage_utils::{
         compression::{
             compress,
             compress_best,

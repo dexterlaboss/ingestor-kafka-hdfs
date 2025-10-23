@@ -30,6 +30,7 @@ mod config;
 mod decompressor;
 mod file_storage;
 mod format_parser;
+mod entries_parser;
 mod hbase;
 mod ingestor;
 mod ledger_storage;
@@ -126,6 +127,7 @@ async fn main() -> Result<()> {
 
 /// Process uploader-related CLI arguments
 fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
+    let write_block_entries = matches.is_present("write_block_entries");
     let disable_tx = matches.is_present("disable_tx");
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
     let disable_blocks = matches.is_present("disable_blocks");
@@ -180,6 +182,7 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let tx_by_addr_filter = create_filter(filter_tx_by_addr_exclude_addrs, filter_tx_by_addr_include_addrs);
 
     UploaderConfig {
+        write_block_entries,
         tx_full_filter,
         tx_by_addr_filter,
         disable_tx,

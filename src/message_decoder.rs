@@ -2,8 +2,17 @@ use {
     anyhow::{anyhow, Context, Result},
     serde_json::Value,
     std::str,
-    solana_binary_encoder::transaction_status::EncodedConfirmedBlock,
+    // solana_block_decoder::transaction_status::EncodedConfirmedBlock,
+    solana_block_decoder::{
+        block::{
+            encoded_block::{
+                EncodedConfirmedBlock,
+            }
+        },
+    },
+    solana_transaction_status::EntrySummary,
 };
+use crate::entries_parser::parse_entries_from_value;
 
 #[async_trait::async_trait]
 pub trait MessageDecoder: Send + Sync {
@@ -19,6 +28,9 @@ pub enum DecodedPayload {
 
     /// A block ID plus the block data that should be uploaded to the storage.
     Block(u64, EncodedConfirmedBlock),
+
+    /// A block ID with block data and entries summaries together.
+    BlockWithEntries(u64, EncodedConfirmedBlock, Vec<EntrySummary>),
 }
 
 pub struct JsonMessageDecoder;
@@ -33,24 +45,52 @@ impl MessageDecoder for JsonMessageDecoder {
         // Attempt to parse as JSON
         match serde_json::from_str::<Value>(msg_str) {
             Ok(json_val) => {
-                // if there’s a "blockID", treat it as a block
+                // Preferred format: top-level block data with optional entries
                 if let Some(block_id) = json_val["blockID"].as_u64() {
-                    // parse entire block
-                    let block: EncodedConfirmedBlock =
-                        serde_json::from_value(json_val)
-                            .with_context(|| "Failed to parse EncodedConfirmedBlock")?;
-
-                    Ok(DecodedPayload::Block(block_id, block))
-                } else {
-                    // If there's no "blockID", maybe it's still a file path in JSON form
-                    // e.g. {"hdfs_path": "hdfs://my-file.gz"}
-                    if let Some(file_path) = json_val["hdfs_path"].as_str() {
-                        Ok(DecodedPayload::FilePath(file_path.to_string()))
+                    let entries = if let Some(entries_value) = json_val.get("entries") {
+                        parse_entries_from_value(entries_value)
+                            .with_context(|| "Failed to parse entries field")?
                     } else {
-                        // unrecognized JSON structure
-                        Err(anyhow!("Unrecognized JSON payload: {}", msg_str))
-                    }
+                        vec![]
+                    };
+
+                    // Remove entries before parsing into EncodedConfirmedBlock
+                    let block_value = if let Some(mut obj) = json_val.as_object().cloned() {
+                        let _ = obj.remove("entries");
+                        Value::Object(obj)
+                    } else {
+                        json_val.clone()
+                    };
+
+                    let block: EncodedConfirmedBlock = serde_json::from_value(block_value)
+                        .with_context(|| "Failed to parse EncodedConfirmedBlock")?;
+
+                    return Ok(DecodedPayload::BlockWithEntries(block_id, block, entries));
                 }
+
+                // Fallback format support for nested { block: {...}, entries: {...} }
+                if json_val.get("block").is_some() {
+                    let block_value = &json_val["block"];
+                    let block_id = block_value["blockID"].as_u64()
+                        .ok_or_else(|| anyhow!("Missing block.blockID in payload"))?;
+                    let block: EncodedConfirmedBlock = serde_json::from_value(block_value.clone())
+                        .with_context(|| "Failed to parse EncodedConfirmedBlock from block field")?;
+
+                    let entries = if let Some(entries_value) = json_val.get("entries") {
+                        parse_entries_from_value(entries_value)
+                            .with_context(|| "Failed to parse entries field")?
+                    } else {
+                        vec![]
+                    };
+                    return Ok(DecodedPayload::BlockWithEntries(block_id, block, entries));
+                }
+
+                // Alternatively, JSON may be a file path wrapper
+                if let Some(file_path) = json_val["hdfs_path"].as_str() {
+                    return Ok(DecodedPayload::FilePath(file_path.to_string()));
+                }
+
+                Err(anyhow!("Unrecognized JSON payload: {}", msg_str))
             }
             Err(_) => {
                 // If it fails to parse as JSON, maybe the entire string is a file path

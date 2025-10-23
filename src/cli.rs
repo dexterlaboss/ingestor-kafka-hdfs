@@ -23,6 +23,12 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
         .about("Solana Block Uploader Service")
         .version(version)
         .arg(
+            Arg::with_name("write_block_entries")
+                .long("write-block-entries")
+                .takes_value(false)
+                .help("Write block Entries summaries to HBase 'entries' table."),
+        )
+        .arg(
             Arg::with_name("disable_tx")
                 .long("disable-tx")
                 .takes_value(false)

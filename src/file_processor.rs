@@ -37,6 +37,11 @@ where
             DecodedPayload::Block(block_id, block) => {
                 self.block_processor.handle_block(block_id, block).await
             }
+            DecodedPayload::BlockWithEntries(block_id, block, entries) => {
+                self.block_processor
+                    .handle_block_with_entries(block_id, block, entries)
+                    .await
+            }
         }
     }
 }
@@ -121,8 +126,12 @@ where
     /// Process a single line from the record stream.
     pub async fn process_line(&self, line: &str) {
         match self.parser.parse_record(line) {
-            Ok(Some((block_id, block))) => {
-                if let Err(err) = self.block_processor.handle_block(block_id, block).await {
+            Ok(Some((block_id, block, entries))) => {
+                if let Err(err) = self
+                    .block_processor
+                    .handle_block_with_entries(block_id, block, entries)
+                    .await
+                {
                     error!("Error handling block: {err}");
                 }
             }
