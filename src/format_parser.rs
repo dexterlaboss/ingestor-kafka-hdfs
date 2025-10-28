@@ -69,4 +69,3 @@ impl FormatParser for NdJsonParser {
         Ok(Some((block_id, block, entries)))
     }
 }
-// entries parsing moved to entries_parser.rs

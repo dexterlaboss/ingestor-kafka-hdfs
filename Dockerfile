@@ -10,6 +10,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     libudev-dev \
     libssl-dev \
     pkg-config \
+    libsasl2-dev \
     ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -25,6 +26,8 @@ FROM rust:1.83-slim-bullseye
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     libssl1.1 \
+    libsasl2-2 \
+    libsasl2-modules \
     ca-certificates \
     wget \
     && apt-get clean \

@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "ingestor-kafka-hdfs"
-version = "2.5.1"
+version = "2.5.2"
 dependencies = [
  "anyhow",
  "async-compression",

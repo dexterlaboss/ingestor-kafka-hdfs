@@ -2,6 +2,9 @@ use {
     clap::{
         App,
         Arg,
+        ArgMatches,
+        value_t_or_exit,
+        values_t,
     },
     solana_clap_utils::{
         input_validators::{
@@ -10,7 +13,9 @@ use {
             is_within_range,
         },
     },
+    solana_sdk::pubkey::Pubkey,
 };
+use crate::ledger_storage::{FilterTxIncludeExclude, LedgerCacheConfig, UploaderConfig};
 
 const EXCLUDE_TX_FULL_ADDR: &str = "filter-tx-full-exclude-addr";
 const INCLUDE_TX_FULL_ADDR: &str = "filter-tx-full-include-addr";
@@ -226,4 +231,147 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                 .help("If HBase should skip WAL when writing new data."),
         )
     ;
+}
+
+/// Process uploader-related CLI arguments
+pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
+    let write_block_entries = matches.is_present("write_block_entries");
+    let disable_tx = matches.is_present("disable_tx");
+    let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
+    let disable_blocks = matches.is_present("disable_blocks");
+    let enable_full_tx = matches.is_present("enable_full_tx");
+    let use_md5_row_key_salt = matches.is_present("use_md5_row_key_salt");
+    let hash_tx_full_row_keys = matches.is_present("hash_tx_full_row_keys");
+    let filter_program_accounts = matches.is_present("filter_tx_by_addr_programs");
+    let filter_readonly_accounts = matches.is_present("filter_tx_by_addr_readonly_accounts");
+    let filter_tx_voting = matches.is_present("filter_tx_voting");
+    let filter_tx_by_addr_voting = matches.is_present("filter_tx_by_addr_voting");
+    let filter_tx_full_voting = matches.is_present("filter_tx_full_voting");
+    let filter_all_voting = matches.is_present("filter_all_voting");
+    let filter_tx_error = matches.is_present("filter_tx_error");
+    let filter_tx_by_addr_error = matches.is_present("filter_tx_by_addr_error");
+    let filter_tx_full_error = matches.is_present("filter_tx_full_error");
+    let filter_all_error = matches.is_present("filter_all_error");
+    let use_blocks_compression = !matches.is_present("disable_blocks_compression");
+    let use_tx_compression = !matches.is_present("disable_tx_compression");
+    let use_tx_by_addr_compression = !matches.is_present("disable_tx_by_addr_compression");
+    let use_tx_full_compression = !matches.is_present("disable_tx_full_compression");
+    let hbase_write_to_wal = !matches.is_present("hbase_skip_wal");
+
+    let filter_tx_full_include_addrs: std::collections::HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_full_include_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+
+    let filter_tx_full_exclude_addrs: std::collections::HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_full_exclude_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+
+    let filter_tx_by_addr_include_addrs: std::collections::HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_by_addr_include_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+
+    let filter_tx_by_addr_exclude_addrs: std::collections::HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_by_addr_exclude_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+
+    let tx_full_filter = create_filter(filter_tx_full_exclude_addrs, filter_tx_full_include_addrs);
+    let tx_by_addr_filter = create_filter(filter_tx_by_addr_exclude_addrs, filter_tx_by_addr_include_addrs);
+
+    UploaderConfig {
+        write_block_entries,
+        tx_full_filter,
+        tx_by_addr_filter,
+        disable_tx,
+        disable_tx_by_addr,
+        disable_blocks,
+        enable_full_tx,
+        use_md5_row_key_salt,
+        hash_tx_full_row_keys,
+        filter_program_accounts,
+        filter_readonly_accounts,
+        filter_tx_voting,
+        filter_tx_by_addr_voting,
+        filter_tx_full_voting,
+        filter_all_voting,
+        filter_tx_error,
+        filter_tx_by_addr_error,
+        filter_tx_full_error,
+        filter_all_error,
+        use_blocks_compression,
+        use_tx_compression,
+        use_tx_by_addr_compression,
+        use_tx_full_compression,
+        hbase_write_to_wal,
+        ..Default::default()
+    }
+}
+
+/// Process cache-related CLI arguments
+pub fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
+    let enable_full_tx_cache = matches.is_present("enable_full_tx_cache");
+
+    let address = if matches.is_present("cache_address") {
+        value_t_or_exit!(matches, "cache_address", String)
+    } else {
+        String::new()
+    };
+
+    let timeout = if matches.is_present("cache_timeout") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "cache_timeout", u64),
+        ))
+    } else {
+        None
+    };
+
+    let tx_cache_expiration = if matches.is_present("tx_cache_expiration") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "tx_cache_expiration", u64) * 24 * 60 * 60,
+        ))
+    } else {
+        None
+    };
+
+    LedgerCacheConfig {
+        enable_full_tx_cache,
+        address,
+        timeout,
+        tx_cache_expiration,
+        ..Default::default()
+    }
+}
+
+/// Helper function to create a filter
+fn create_filter(
+    filter_tx_exclude_addrs: std::collections::HashSet<Pubkey>,
+    filter_tx_include_addrs: std::collections::HashSet<Pubkey>,
+) -> Option<FilterTxIncludeExclude> {
+    let exclude_tx_addrs = !filter_tx_exclude_addrs.is_empty();
+    let include_tx_addrs = !filter_tx_include_addrs.is_empty();
+
+    if exclude_tx_addrs || include_tx_addrs {
+        let filter_tx_addrs = FilterTxIncludeExclude {
+            exclude: exclude_tx_addrs,
+            addrs: if exclude_tx_addrs {
+                filter_tx_exclude_addrs
+            } else {
+                filter_tx_include_addrs
+            },
+        };
+        Some(filter_tx_addrs)
+    } else {
+        None
+    }
 }
