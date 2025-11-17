@@ -1,18 +1,12 @@
+use crate::entries_parser::parse_entries_from_value;
 use {
     anyhow::{anyhow, Context, Result},
     serde_json::Value,
-    std::str,
     // solana_block_decoder::transaction_status::EncodedConfirmedBlock,
-    solana_block_decoder::{
-        block::{
-            encoded_block::{
-                EncodedConfirmedBlock,
-            }
-        },
-    },
+    solana_block_decoder::block::encoded_block::EncodedConfirmedBlock,
     solana_transaction_status::EntrySummary,
+    std::str,
 };
-use crate::entries_parser::parse_entries_from_value;
 
 #[async_trait::async_trait]
 pub trait MessageDecoder: Send + Sync {
@@ -39,8 +33,8 @@ pub struct JsonMessageDecoder;
 impl MessageDecoder for JsonMessageDecoder {
     async fn decode(&self, data: &[u8]) -> Result<DecodedPayload> {
         // Convert bytes to string
-        let msg_str = str::from_utf8(data)
-            .map_err(|e| anyhow!("Invalid UTF-8 in message: {}", e))?;
+        let msg_str =
+            str::from_utf8(data).map_err(|e| anyhow!("Invalid UTF-8 in message: {}", e))?;
 
         // Attempt to parse as JSON
         match serde_json::from_str::<Value>(msg_str) {
@@ -71,10 +65,13 @@ impl MessageDecoder for JsonMessageDecoder {
                 // Fallback format support for nested { block: {...}, entries: {...} }
                 if json_val.get("block").is_some() {
                     let block_value = &json_val["block"];
-                    let block_id = block_value["blockID"].as_u64()
+                    let block_id = block_value["blockID"]
+                        .as_u64()
                         .ok_or_else(|| anyhow!("Missing block.blockID in payload"))?;
                     let block: EncodedConfirmedBlock = serde_json::from_value(block_value.clone())
-                        .with_context(|| "Failed to parse EncodedConfirmedBlock from block field")?;
+                        .with_context(|| {
+                            "Failed to parse EncodedConfirmedBlock from block field"
+                        })?;
 
                     let entries = if let Some(entries_value) = json_val.get("entries") {
                         parse_entries_from_value(entries_value)
@@ -99,7 +96,10 @@ impl MessageDecoder for JsonMessageDecoder {
                 if trimmed.ends_with(".gz") || trimmed.contains("hdfs://") {
                     Ok(DecodedPayload::FilePath(trimmed.to_string()))
                 } else {
-                    Err(anyhow!("Unable to decode message as JSON or file path: {}", trimmed))
+                    Err(anyhow!(
+                        "Unable to decode message as JSON or file path: {}",
+                        trimmed
+                    ))
                 }
             }
         }
