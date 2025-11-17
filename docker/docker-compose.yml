@@ -3,6 +3,17 @@
 #version: '3.8'
 
 services:
+  hbase-indexer-devcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingestor.dev
+    container_name: hbase-indexer-devcontainer
+    volumes:
+      - ../..:/workspaces:cached
+    networks:
+      - app-network
+    command: sleep infinity
+
   hbase:
     build:
       context: .
@@ -29,6 +40,10 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+    environment:
+      HBASE_CONF_DIR: "/opt/hbase/conf"
+      JAVA_HOME: "/usr/lib/jvm/java-8-openjdk-amd64"
+      PATH: "/usr/lib/jvm/java-8-openjdk-amd64/bin:/opt/hbase/bin:$PATH"
 
   kafka-zookeeper:
     image: 'confluentinc/cp-zookeeper:7.3.1'
@@ -59,6 +74,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_MESSAGE_MAX_BYTES: 20971520 # 20 MB
     networks:
       - app-network
     healthcheck:

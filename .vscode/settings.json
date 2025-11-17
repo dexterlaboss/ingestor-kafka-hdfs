@@ -1,0 +1,13 @@
+{
+    "editor.formatOnSave": false,
+    "editor.smoothScrolling": true,
+    "workbench.colorCustomizations": {
+        "bookmarks.lineBackground": "#0C3030",
+    },
+    "cSpell.language": "en",
+    "cSpell.words": [],
+    "rust-analyzer.linkedProjects": [
+        "./Cargo.toml",
+    ],
+    "rust-analyzer.showUnlinkedFileNotification": false
+}
