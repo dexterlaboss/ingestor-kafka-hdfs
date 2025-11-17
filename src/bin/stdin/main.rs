@@ -25,7 +25,10 @@ async fn main() -> Result<()> {
     let matches = cli_app.get_matches();
 
     env_logger::init();
-    info!("Starting the Solana block ingestor (stdin) (Version: {})", SERVICE_VERSION);
+    info!(
+        "Starting the Solana block ingestor (stdin) (Version: {})",
+        SERVICE_VERSION
+    );
 
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
@@ -53,7 +56,8 @@ async fn main() -> Result<()> {
         block_processor,
         decompressor,
     );
-    let decoder: std::sync::Arc<dyn MessageDecoder + Send + Sync> = std::sync::Arc::new(JsonMessageDecoder {});
+    let decoder: std::sync::Arc<dyn MessageDecoder + Send + Sync> =
+        std::sync::Arc::new(JsonMessageDecoder {});
 
     // Read NDJSON lines from stdin and feed through the same parser/processor pipeline
     let reader = BufReader::new(tokio::io::stdin());
@@ -78,5 +82,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-

@@ -1,20 +1,26 @@
+use crate::entries_parser::parse_entries_from_value;
 use {
     anyhow::{Context, Result},
     serde_json::Value,
     solana_block_decoder::block::encoded_block::EncodedConfirmedBlock,
     solana_transaction_status::EntrySummary,
 };
-use crate::entries_parser::parse_entries_from_value;
 
 pub trait FormatParser: Send + Sync {
     /// Parse a single record (line) into `(block_id, EncodedConfirmedBlock, entries)` or `None` if invalid.
-    fn parse_record(&self, record: &str) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>>;
+    fn parse_record(
+        &self,
+        record: &str,
+    ) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>>;
 }
 
 pub struct NdJsonParser;
 
 impl FormatParser for NdJsonParser {
-    fn parse_record(&self, record: &str) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>> {
+    fn parse_record(
+        &self,
+        record: &str,
+    ) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>> {
         let trimmed = record.trim();
         if trimmed.is_empty() {
             return Ok(None);
@@ -34,7 +40,8 @@ impl FormatParser for NdJsonParser {
         } else {
             // Fallback format: nested { block: {...}, entries: {...} }
             if let Some(block_value) = value.get("block") {
-                let block_id = block_value["blockID"].as_u64()
+                let block_id = block_value["blockID"]
+                    .as_u64()
                     .context("Missing block.blockID in record")?;
                 let entries = if let Some(entries_value) = value.get("entries") {
                     parse_entries_from_value(entries_value)?
@@ -63,8 +70,8 @@ impl FormatParser for NdJsonParser {
             value.clone()
         };
 
-        let block: EncodedConfirmedBlock = serde_json::from_value(block_value)
-            .context("Failed to parse EncodedConfirmedBlock")?;
+        let block: EncodedConfirmedBlock =
+            serde_json::from_value(block_value).context("Failed to parse EncodedConfirmedBlock")?;
 
         Ok(Some((block_id, block, entries)))
     }

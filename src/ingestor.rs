@@ -1,8 +1,6 @@
 use {
     crate::{
-        file_processor::Processor,
-        message_decoder::MessageDecoder,
-        queue_consumer::QueueConsumer,
+        file_processor::Processor, message_decoder::MessageDecoder, queue_consumer::QueueConsumer,
         queue_producer::QueueProducer,
     },
     anyhow::Result,
@@ -51,8 +49,11 @@ where
                                 // Process the decoded payload
                                 if let Err(e) = self.processor.process_decoded(decoded).await {
                                     warn!("Error processing payload: {:?}", e);
-                                    self.send_to_dead_letter(payload_str.as_bytes(), &e.to_string())
-                                        .await;
+                                    self.send_to_dead_letter(
+                                        payload_str.as_bytes(),
+                                        &e.to_string(),
+                                    )
+                                    .await;
                                 }
 
                                 if let Err(e) = self.consumer.commit(&queue_message).await {
@@ -61,8 +62,11 @@ where
                             }
                             Err(decode_err) => {
                                 warn!("Failed to decode payload: {:?}", decode_err);
-                                self.send_to_dead_letter(payload_str.as_bytes(), &decode_err.to_string())
-                                    .await;
+                                self.send_to_dead_letter(
+                                    payload_str.as_bytes(),
+                                    &decode_err.to_string(),
+                                )
+                                .await;
                             }
                         }
                     } else {

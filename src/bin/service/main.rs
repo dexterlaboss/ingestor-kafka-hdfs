@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     let matches = cli_app.get_matches();
 
     env_logger::init();
-    info!("Starting the Solana block ingestor (Version: {})", SERVICE_VERSION);
+    info!(
+        "Starting the Solana block ingestor (Version: {})",
+        SERVICE_VERSION
+    );
 
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
@@ -72,25 +75,15 @@ async fn main() -> Result<()> {
         log_level: RDKafkaLogLevel::Debug,
     };
 
-    let consumer: Box<dyn QueueConsumer + Send + Sync> = Box::new(
-        KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic]).unwrap(),
-    );
+    let consumer: Box<dyn QueueConsumer + Send + Sync> =
+        Box::new(KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic]).unwrap());
 
-    let kafka_producer = KafkaQueueProducer::new(
-        &config.kafka_brokers,
-        &config.kafka_produce_error_topic,
-    )?;
+    let kafka_producer =
+        KafkaQueueProducer::new(&config.kafka_brokers, &config.kafka_produce_error_topic)?;
 
-    let mut ingestor = Ingestor::new(
-        consumer,
-        kafka_producer,
-        file_processor,
-        message_decoder,
-    );
+    let mut ingestor = Ingestor::new(consumer, kafka_producer, file_processor, message_decoder);
 
     ingestor.run().await?;
 
     Ok(())
 }
-
-

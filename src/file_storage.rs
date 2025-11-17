@@ -19,7 +19,6 @@ pub struct FileMetadata {
     pub is_dir: bool,
 }
 
-
 pub struct HdfsStorage {
     client: Arc<hdfs_native::Client>,
 }
@@ -59,9 +58,9 @@ impl FileStorage for HdfsStorage {
             .with_context(|| format!("Failed to open file '{file_path}'"))?;
 
         let stream = file_reader_stream(file);
-        let async_reader = StreamReader::new(stream.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }));
+        let async_reader = StreamReader::new(
+            stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        );
 
         Ok(Box::new(async_reader))
     }

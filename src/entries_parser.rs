@@ -22,10 +22,7 @@ pub fn parse_entries_from_value(v: &Value) -> Result<Vec<EntrySummary>> {
         return Ok(vec![]);
     }
     if let Some(arr) = v.as_array() {
-        return arr
-            .iter()
-            .map(|e| parse_entry_summary(e))
-            .collect();
+        return arr.iter().map(|e| parse_entry_summary(e)).collect();
     }
     if let Some(obj) = v.as_object() {
         if let Some(inner) = obj.get("entries") {
@@ -37,8 +34,8 @@ pub fn parse_entries_from_value(v: &Value) -> Result<Vec<EntrySummary>> {
 }
 
 pub fn parse_entry_summary(v: &Value) -> Result<EntrySummary> {
-    let je: JsonEntrySummary = serde_json::from_value(v.clone())
-        .with_context(|| "Invalid entry summary object")?;
+    let je: JsonEntrySummary =
+        serde_json::from_value(v.clone()).with_context(|| "Invalid entry summary object")?;
     let hash: Hash = je
         .hash
         .parse()
@@ -50,5 +47,3 @@ pub fn parse_entry_summary(v: &Value) -> Result<EntrySummary> {
         starting_transaction_index: je.starting_transaction_index,
     })
 }
-
-

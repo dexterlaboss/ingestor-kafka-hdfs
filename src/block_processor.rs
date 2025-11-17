@@ -1,8 +1,7 @@
 use {
-    crate::{
-        ledger_storage::LedgerStorage
-    },
+    crate::ledger_storage::LedgerStorage,
     anyhow::{Context, Result},
+    solana_block_decoder::{block::encoded_block::EncodedConfirmedBlock, convert_block},
     // solana_block_decoder::{
     //     transaction_status::{
     //         BlockEncodingOptions,
@@ -12,19 +11,7 @@ use {
     //     },
     //     convert_block,
     // },
-    solana_transaction_status::{
-        BlockEncodingOptions,
-        UiTransactionEncoding,
-        TransactionDetails,
-    },
-    solana_block_decoder::{
-        block::{
-            encoded_block::{
-                EncodedConfirmedBlock,
-            }
-        },
-        convert_block,
-    },
+    solana_transaction_status::{BlockEncodingOptions, TransactionDetails, UiTransactionEncoding},
     solana_transaction_status::{EntrySummary, VersionedConfirmedBlockWithEntries},
 };
 
@@ -71,7 +58,10 @@ impl BlockProcessor {
         let versioned_block = convert_block(block, UiTransactionEncoding::Json, options)
             .map_err(|e| anyhow::anyhow!("Failed to convert block: {}", e))?;
 
-        let with_entries = VersionedConfirmedBlockWithEntries { block: versioned_block, entries };
+        let with_entries = VersionedConfirmedBlockWithEntries {
+            block: versioned_block,
+            entries,
+        };
 
         self.storage
             .upload_confirmed_block_with_entries(block_id, with_entries)

@@ -28,7 +28,6 @@ pub trait QueueConsumer: Send + Sync {
     async fn commit(&self, message: &QueueMessage<String>) -> Result<()>;
 }
 
-
 // Blanket implementation for Box<dyn QueueConsumer + Send + Sync>
 // This lets `Box<dyn QueueConsumer + Send + Sync>` be treated as a `QueueConsumer`.
 #[async_trait]
@@ -85,7 +84,10 @@ impl KafkaQueueConsumer {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", &config.group_id)
             .set("bootstrap.servers", &config.bootstrap_servers)
-            .set("enable.partition.eof", config.enable_partition_eof.to_string())
+            .set(
+                "enable.partition.eof",
+                config.enable_partition_eof.to_string(),
+            )
             .set("session.timeout.ms", config.session_timeout_ms.to_string())
             .set("enable.auto.commit", config.enable_auto_commit.to_string())
             .set("auto.offset.reset", &config.auto_offset_reset)
