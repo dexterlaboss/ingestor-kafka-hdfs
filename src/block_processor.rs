@@ -32,12 +32,12 @@ impl BlockProcessor {
             max_supported_transaction_version: Some(0),
         };
         let versioned_block = convert_block(block, UiTransactionEncoding::Json, options)
-            .map_err(|e| anyhow::anyhow!("Failed to convert block: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to convert block={block_id}: {}", e))?;
 
         self.storage
             .upload_confirmed_block(block_id, versioned_block)
             .await
-            .context("Failed to upload confirmed block")?;
+            .context(format!("Failed to upload confirmed block={block_id}"))?;
 
         Ok(())
     }
@@ -56,7 +56,7 @@ impl BlockProcessor {
             max_supported_transaction_version: Some(0),
         };
         let versioned_block = convert_block(block, UiTransactionEncoding::Json, options)
-            .map_err(|e| anyhow::anyhow!("Failed to convert block: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to convert block={block_id}: {}", e))?;
 
         let with_entries = VersionedConfirmedBlockWithEntries {
             block: versioned_block,
@@ -66,7 +66,9 @@ impl BlockProcessor {
         self.storage
             .upload_confirmed_block_with_entries(block_id, with_entries)
             .await
-            .context("Failed to upload confirmed block with entries")?;
+            .context(format!(
+                "Failed to upload confirmed block={block_id} with entries"
+            ))?;
 
         Ok(())
     }

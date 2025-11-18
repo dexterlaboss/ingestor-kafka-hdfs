@@ -106,6 +106,15 @@ enum TaskResult {
 }
 
 #[derive(Debug)]
+enum TaskType {
+    UploadTx,
+    UploadTxByAddr,
+    UploadFullTx,
+    CacheFullTx,
+    UploadEntries,
+}
+
+#[derive(Debug)]
 enum TaskError {
     HBaseError(HBaseError),
     MemcacheError(MemcacheError),
@@ -128,6 +137,23 @@ impl From<HBaseError> for TaskError {
 impl From<MemcacheError> for TaskError {
     fn from(err: MemcacheError) -> Self {
         TaskError::MemcacheError(err)
+    }
+}
+
+struct TaskErrorWithType {
+    task_type: TaskType,
+    err: TaskError,
+}
+
+impl TaskErrorWithType {
+    fn new<T>(task_type: TaskType, err: T) -> Self
+    where
+        TaskError: From<T>,
+    {
+        Self {
+            task_type,
+            err: TaskError::from(err),
+        }
     }
 }
 
@@ -647,7 +673,7 @@ impl LedgerStorage {
                 )
                 .await
                 .map(TaskResult::BytesWritten)
-                .map_err(TaskError::from)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadFullTx, e))
             }));
         }
 
@@ -666,13 +692,13 @@ impl LedgerStorage {
                             tx_cache_expiration,
                         )
                         .await
-                        .map_err(TaskError::from)?;
+                        .map_err(|e| TaskErrorWithType::new(TaskType::CacheFullTx, e))?;
 
                         cached_count += 1;
                         debug!("Cached transaction with signature {}", signature);
                     }
                 }
-                Ok::<TaskResult, TaskError>(TaskResult::CachedTransactions(cached_count))
+                Ok::<TaskResult, TaskErrorWithType>(TaskResult::CachedTransactions(cached_count))
             }));
         }
 
@@ -692,7 +718,7 @@ impl LedgerStorage {
                 )
                 .await
                 .map(TaskResult::BytesWritten)
-                .map_err(TaskError::from)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadTx, e))
             }));
         }
 
@@ -713,7 +739,7 @@ impl LedgerStorage {
                 )
                 .await
                 .map(TaskResult::BytesWritten)
-                .map_err(TaskError::from)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadTxByAddr, e))
             }));
         }
 
@@ -740,7 +766,7 @@ impl LedgerStorage {
                     )
                     .await
                     .map(TaskResult::BytesWritten)
-                    .map_err(TaskError::from)
+                    .map_err(|e| TaskErrorWithType::new(TaskType::UploadEntries, e))
                 }));
             }
         }
@@ -761,8 +787,11 @@ impl LedgerStorage {
                         maybe_first_err = Some(Error::TokioJoinError(err));
                     }
                 }
-                Ok(Err(err)) => {
-                    debug!("HBase: got error result {:?}", err);
+                Ok(Err(TaskErrorWithType { task_type, err })) => {
+                    error!(
+                        "HBase: got error result: type={:?}, error={:?}",
+                        task_type, err
+                    );
                     if maybe_first_err.is_none() {
                         match err {
                             TaskError::HBaseError(hbase_err) => {

@@ -42,8 +42,9 @@ impl MessageDecoder for JsonMessageDecoder {
                 // Preferred format: top-level block data with optional entries
                 if let Some(block_id) = json_val["blockID"].as_u64() {
                     let entries = if let Some(entries_value) = json_val.get("entries") {
-                        parse_entries_from_value(entries_value)
-                            .with_context(|| "Failed to parse entries field")?
+                        parse_entries_from_value(entries_value).with_context(|| {
+                            format!("Failed to parse entries field - slot={block_id}")
+                        })?
                     } else {
                         vec![]
                     };
@@ -57,7 +58,9 @@ impl MessageDecoder for JsonMessageDecoder {
                     };
 
                     let block: EncodedConfirmedBlock = serde_json::from_value(block_value)
-                        .with_context(|| "Failed to parse EncodedConfirmedBlock")?;
+                        .with_context(|| {
+                            format!("Failed to parse EncodedConfirmedBlock - slot={block_id}")
+                        })?;
 
                     return Ok(DecodedPayload::BlockWithEntries(block_id, block, entries));
                 }
@@ -70,12 +73,13 @@ impl MessageDecoder for JsonMessageDecoder {
                         .ok_or_else(|| anyhow!("Missing block.blockID in payload"))?;
                     let block: EncodedConfirmedBlock = serde_json::from_value(block_value.clone())
                         .with_context(|| {
-                            "Failed to parse EncodedConfirmedBlock from block field"
+                            format!("Failed to parse EncodedConfirmedBlock from block field - slot={block_id}")
                         })?;
 
                     let entries = if let Some(entries_value) = json_val.get("entries") {
-                        parse_entries_from_value(entries_value)
-                            .with_context(|| "Failed to parse entries field")?
+                        parse_entries_from_value(entries_value).with_context(|| {
+                            format!("Failed to parse entries field - slot={block_id}")
+                        })?
                     } else {
                         vec![]
                     };
