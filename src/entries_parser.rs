@@ -56,5 +56,3 @@ pub fn parse_entry_summary(v: &Value) -> Result<EntrySummary> {
         starting_transaction_index: je.starting_transaction_index,
     })
 }
-
-

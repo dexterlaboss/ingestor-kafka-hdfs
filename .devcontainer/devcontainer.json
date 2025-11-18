@@ -1,0 +1,27 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/rust
+{
+    "name": "Hbase Indexer",
+    "dockerComposeFile": "../docker/docker-compose.yml",
+    "service": "hbase-indexer-devcontainer",
+    "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "fill-labs.dependi", // crates
+                "vadimcn.vscode-lldb", //debug
+                "streetsidesoftware.code-spell-checker"
+            ],
+            "settings": {
+                "editor.formatOnSave": true,
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    },
+    "runArgs": [
+        "--add-host=host.docker.internal:host-gateway",
+        "--network=host"
+    ],
+    "remoteUser": "root"
+}

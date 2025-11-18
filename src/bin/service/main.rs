@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     let matches = cli_app.get_matches();
 
     env_logger::init();
-    info!("Starting the Solana block ingestor (Version: {})", SERVICE_VERSION);
+    info!(
+        "Starting the Solana block ingestor (Version: {})",
+        SERVICE_VERSION
+    );
 
     if matches.is_present("add_empty_tx_metadata_if_missing") {
         std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
@@ -76,25 +79,15 @@ async fn main() -> Result<()> {
         log_level: RDKafkaLogLevel::Debug,
     };
 
-    let consumer: Box<dyn QueueConsumer + Send + Sync> = Box::new(
-        KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic]).unwrap(),
-    );
+    let consumer: Box<dyn QueueConsumer + Send + Sync> =
+        Box::new(KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic]).unwrap());
 
-    let kafka_producer = KafkaQueueProducer::new(
-        &config.kafka_brokers,
-        &config.kafka_produce_error_topic,
-    )?;
+    let kafka_producer =
+        KafkaQueueProducer::new(&config.kafka_brokers, &config.kafka_produce_error_topic)?;
 
-    let mut ingestor = Ingestor::new(
-        consumer,
-        kafka_producer,
-        file_processor,
-        message_decoder,
-    );
+    let mut ingestor = Ingestor::new(consumer, kafka_producer, file_processor, message_decoder);
 
     ingestor.run().await?;
 
     Ok(())
 }
-
-

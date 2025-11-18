@@ -9,13 +9,19 @@ use crate::json_utils::from_value_with_path;
 
 pub trait FormatParser: Send + Sync {
     /// Parse a single record (line) into `(block_id, EncodedConfirmedBlock, entries)` or `None` if invalid.
-    fn parse_record(&self, record: &str) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>>;
+    fn parse_record(
+        &self,
+        record: &str,
+    ) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>>;
 }
 
 pub struct NdJsonParser;
 
 impl FormatParser for NdJsonParser {
-    fn parse_record(&self, record: &str) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>> {
+    fn parse_record(
+        &self,
+        record: &str,
+    ) -> Result<Option<(u64, EncodedConfirmedBlock, Vec<EntrySummary>)>> {
         let trimmed = record.trim();
         if trimmed.is_empty() {
             return Ok(None);
@@ -40,7 +46,8 @@ impl FormatParser for NdJsonParser {
         } else {
             // Fallback format: nested { block: {...}, entries: {...} }
             if let Some(block_value) = value.get("block") {
-                let block_id = block_value["blockID"].as_u64()
+                let block_id = block_value["blockID"]
+                    .as_u64()
                     .context("Missing block.blockID in record")?;
                 let entries = if let Some(entries_value) = value.get("entries") {
                     parse_entries_from_value(entries_value)?

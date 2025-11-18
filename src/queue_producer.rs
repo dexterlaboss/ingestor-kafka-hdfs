@@ -9,7 +9,11 @@ use {
 
 #[async_trait::async_trait]
 pub trait QueueProducer {
-    async fn produce_message(&self, payload: BytesMut, headers: Option<Vec<(&str, &str)>>) -> Result<()>;
+    async fn produce_message(
+        &self,
+        payload: BytesMut,
+        headers: Option<Vec<(&str, &str)>>,
+    ) -> Result<()>;
 }
 
 pub struct KafkaQueueProducer {
@@ -31,7 +35,11 @@ impl KafkaQueueProducer {
 
 #[async_trait::async_trait]
 impl QueueProducer for KafkaQueueProducer {
-    async fn produce_message(&self, payload: BytesMut, headers: Option<Vec<(&str, &str)>>) -> Result<()> {
+    async fn produce_message(
+        &self,
+        payload: BytesMut,
+        headers: Option<Vec<(&str, &str)>>,
+    ) -> Result<()> {
         let payload_vec = payload.to_vec();
 
         let mut record: FutureRecord<'_, (), Vec<u8>> =

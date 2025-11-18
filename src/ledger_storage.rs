@@ -1,12 +1,12 @@
 use solana_sdk::signature::Signature;
+use xxhash_rust::{xxh3::xxh3_128, xxh32::xxh32};
 use {
-    crate::{
-        hbase::{Error as HBaseError, HBaseConnection},
-    },
-    std::{
-        collections::{HashMap, HashSet},
-        str::FromStr,
-    },
+    crate::hbase::{Error as HBaseError, HBaseConnection},
+    dexter_storage_proto_tx::convert::generated,
+    log::{debug, error, info},
+    memcache::{Client, MemcacheError},
+    serde::{Deserialize, Serialize},
+    solana_hash::Hash,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         instruction::CompiledInstruction,
@@ -15,11 +15,14 @@ use {
         sysvar::is_sysvar_id,
         transaction::{TransactionError, VersionedTransaction},
     },
-    solana_hash::Hash,
-    serde::{Deserialize, Serialize},
-    solana_storage_utils::compression::compress_best,
     solana_storage_proto::convert::{entries, tx_by_addr},
-    dexter_storage_proto_tx::convert::{generated},
+    solana_storage_utils::compression::compress_best,
+    // extract_memos::extract_and_fmt_memos,
+    solana_transaction_status::{
+        extract_memos::extract_and_fmt_memos, ConfirmedTransactionWithStatusMeta, EntrySummary,
+        TransactionByAddrInfo, VersionedConfirmedBlock, VersionedConfirmedBlockWithEntries,
+        VersionedTransactionWithStatusMeta,
+    },
     // solana_block_decoder::{
     //     compression::compress_best,
     //     convert::{generated, tx_by_addr},
@@ -40,24 +43,12 @@ use {
         // VersionedTransactionWithStatusMeta,
         // Reward,
     },
-    // extract_memos::extract_and_fmt_memos,
-    solana_transaction_status::{
-        extract_memos::extract_and_fmt_memos,
-        ConfirmedTransactionWithStatusMeta,
-        TransactionByAddrInfo,
-        VersionedConfirmedBlock,
-        VersionedTransactionWithStatusMeta,
-        VersionedConfirmedBlockWithEntries,
-        EntrySummary,
+    std::{
+        collections::{HashMap, HashSet},
+        str::FromStr,
     },
-    log::{debug, error, info},
     thiserror::Error,
     tokio::task::JoinError,
-    memcache::{Client, MemcacheError},
-};
-use xxhash_rust::{
-    xxh3::{xxh3_128},
-    xxh32::{xxh32},
 };
 
 #[derive(Debug, Error)]
@@ -115,11 +106,20 @@ enum TaskResult {
 }
 
 #[derive(Debug)]
+enum TaskType {
+    UploadTx,
+    UploadTxByAddr,
+    UploadFullTx,
+    CacheFullTx,
+    UploadEntries,
+}
+
+#[derive(Debug)]
 enum TaskError {
     HBaseError(HBaseError),
     MemcacheError(MemcacheError),
     IoError(std::io::Error),
-    EncodingError(prost::EncodeError)
+    EncodingError(prost::EncodeError),
 }
 
 impl From<std::io::Error> for TaskError {
@@ -140,10 +140,27 @@ impl From<MemcacheError> for TaskError {
     }
 }
 
+struct TaskErrorWithType {
+    task_type: TaskType,
+    err: TaskError,
+}
+
+impl TaskErrorWithType {
+    fn new<T>(task_type: TaskType, err: T) -> Self
+    where
+        TaskError: From<T>,
+    {
+        Self {
+            task_type,
+            err: TaskError::from(err),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CacheWriteError {
-    MemcacheError(MemcacheError),         // Error from cache client
-    IoError(std::io::Error),                // Error from encoding (e.g., Protobuf)
+    MemcacheError(MemcacheError), // Error from cache client
+    IoError(std::io::Error),      // Error from encoding (e.g., Protobuf)
     EncodingError(prost::EncodeError),
 }
 
@@ -199,7 +216,7 @@ struct TransactionInfo {
     slot: Slot, // The slot that contains the block with this transaction in it
     index: u32, // Where the transaction is located in the block
     err: Option<TransactionError>, // None if the transaction executed successfully
-    // memo: Option<String>, // Transaction memo
+                // memo: Option<String>, // Transaction memo
 }
 
 #[derive(Serialize, Deserialize)]
@@ -269,7 +286,6 @@ impl From<TransactionStatusMeta> for StoredConfirmedBlockTransactionStatusMeta {
     }
 }
 
-
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:9090";
 pub const BLOCKS_TABLE_NAME: &str = "blocks";
 pub const TX_TABLE_NAME: &str = "tx";
@@ -311,7 +327,9 @@ impl Default for LedgerCacheConfig {
         Self {
             enable_full_tx_cache: false,
             address: DEFAULT_MEMCACHE_ADDRESS.to_string(),
-            timeout: Some(std::time::Duration::from_secs(DEFAULT_MEMCACHE_TIMEOUT_SECS)),
+            timeout: Some(std::time::Duration::from_secs(
+                DEFAULT_MEMCACHE_TIMEOUT_SECS,
+            )),
             tx_cache_expiration: Some(std::time::Duration::from_secs(60 * 60 * 24 * 14)), // 14 days
         }
     }
@@ -402,13 +420,12 @@ pub struct LedgerStorage {
 }
 
 impl LedgerStorage {
-    #![ allow(unused)]
-    pub async fn new(
-    ) -> Self {
+    #![allow(unused)]
+    pub async fn new() -> Self {
         Self::new_with_config(LedgerStorageConfig {
             ..LedgerStorageConfig::default()
         })
-            .await
+        .await
     }
 
     pub async fn new_with_config(config: LedgerStorageConfig) -> Self {
@@ -418,11 +435,7 @@ impl LedgerStorage {
             uploader_config,
             cache_config,
         } = config;
-        let connection = HBaseConnection::new(
-            address.as_str(),
-            namespace.as_deref(),
-        )
-            .await;
+        let connection = HBaseConnection::new(address.as_str(), namespace.as_deref()).await;
 
         let cache_client = if cache_config.enable_full_tx_cache {
             let memcache_timeout_secs = cache_config
@@ -433,8 +446,7 @@ impl LedgerStorage {
             // Add the "memcache://" prefix
             let memcache_url = format!(
                 "memcache://{}?timeout={}&protocol=ascii",
-                cache_config.address,
-                memcache_timeout_secs
+                cache_config.address, memcache_timeout_secs
             );
             Some(Client::connect(memcache_url.as_str()).unwrap())
         } else {
@@ -458,7 +470,10 @@ impl LedgerStorage {
         // Delegate to entries-aware upload with empty entries to preserve old behavior
         self.upload_confirmed_block_with_entries(
             slot,
-            VersionedConfirmedBlockWithEntries { block: confirmed_block, entries: vec![] },
+            VersionedConfirmedBlockWithEntries {
+                block: confirmed_block,
+                entries: vec![],
+            },
         )
         .await
     }
@@ -468,10 +483,16 @@ impl LedgerStorage {
         slot: Slot,
         confirmed_block_with_entries: VersionedConfirmedBlockWithEntries,
     ) -> Result<()> {
-        let VersionedConfirmedBlockWithEntries { block: confirmed_block, entries } = confirmed_block_with_entries;
+        let VersionedConfirmedBlockWithEntries {
+            block: confirmed_block,
+            entries,
+        } = confirmed_block_with_entries;
         let mut by_addr: HashMap<&Pubkey, Vec<TransactionByAddrInfo>> = HashMap::new();
 
-        info!("HBase: Uploading block {:?} from slot {:?}", confirmed_block.blockhash, slot);
+        info!(
+            "HBase: Uploading block {:?} from slot {:?}",
+            confirmed_block.blockhash, slot
+        );
 
         let mut tx_cells = vec![];
         let mut full_tx_cells = vec![];
@@ -546,12 +567,14 @@ impl LedgerStorage {
                 for address in transaction_with_meta.account_keys().iter() {
                     // Filter program accounts from tx-by-addr index
                     if self.uploader_config.filter_program_accounts
-                        && is_program_account(address, transaction_with_meta, &combined_keys) {
+                        && is_program_account(address, transaction_with_meta, &combined_keys)
+                    {
                         continue;
                     }
 
                     if self.uploader_config.filter_readonly_accounts
-                        && is_readonly_account(address, transaction_with_meta) {
+                        && is_readonly_account(address, transaction_with_meta)
+                    {
                         continue;
                     }
 
@@ -580,7 +603,9 @@ impl LedgerStorage {
                     ConfirmedTransactionWithStatusMeta {
                         slot,
                         // tx_with_meta: transaction_with_meta.clone().into(),
-                        tx_with_meta: convert_to_transaction_with_status_meta(transaction_with_meta.clone()),
+                        tx_with_meta: convert_to_transaction_with_status_meta(
+                            transaction_with_meta.clone(),
+                        ),
                         block_time: confirmed_block.block_time,
                     }
                     .into(),
@@ -596,7 +621,9 @@ impl LedgerStorage {
                     ConfirmedTransactionWithStatusMeta {
                         slot,
                         // tx_with_meta: transaction_with_meta.clone().into(),
-                        tx_with_meta: convert_to_transaction_with_status_meta(transaction_with_meta.clone()),
+                        tx_with_meta: convert_to_transaction_with_status_meta(
+                            transaction_with_meta.clone(),
+                        ),
                         block_time: confirmed_block.block_time,
                     },
                 ));
@@ -646,7 +673,7 @@ impl LedgerStorage {
                 )
                 .await
                 .map(TaskResult::BytesWritten)
-                .map_err(TaskError::from)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadFullTx, e))
             }));
         }
 
@@ -665,13 +692,13 @@ impl LedgerStorage {
                             tx_cache_expiration,
                         )
                         .await
-                        .map_err(TaskError::from)?;
+                        .map_err(|e| TaskErrorWithType::new(TaskType::CacheFullTx, e))?;
 
                         cached_count += 1;
                         debug!("Cached transaction with signature {}", signature);
                     }
                 }
-                Ok::<TaskResult, TaskError>(TaskResult::CachedTransactions(cached_count))
+                Ok::<TaskResult, TaskErrorWithType>(TaskResult::CachedTransactions(cached_count))
             }));
         }
 
@@ -691,14 +718,15 @@ impl LedgerStorage {
                 )
                 .await
                 .map(TaskResult::BytesWritten)
-                .map_err(TaskError::from)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadTx, e))
             }));
         }
 
         if !tx_by_addr_cells.is_empty() && !self.uploader_config.disable_tx_by_addr {
             let conn = self.connection.clone();
             let tx_by_addr_table_name = self.uploader_config.tx_by_addr_table_name.clone();
-            let use_tx_by_addr_compression = self.uploader_config.use_tx_by_addr_compression.clone();
+            let use_tx_by_addr_compression =
+                self.uploader_config.use_tx_by_addr_compression.clone();
             let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
             debug!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
@@ -707,11 +735,11 @@ impl LedgerStorage {
                     tx_by_addr_table_name.as_str(),
                     &tx_by_addr_cells,
                     use_tx_by_addr_compression,
-                    write_to_wal
+                    write_to_wal,
                 )
-               .await
-               .map(TaskResult::BytesWritten)
-               .map_err(TaskError::from)
+                .await
+                .map(TaskResult::BytesWritten)
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadTxByAddr, e))
             }));
         }
 
@@ -725,7 +753,9 @@ impl LedgerStorage {
                 // Convert EntrySummary -> storage proto entries::Entries
                 let entries_cell = (
                     slot_to_key(slot),
-                    entries::Entries { entries: entries.into_iter().enumerate().map(Into::into).collect() },
+                    entries::Entries {
+                        entries: entries.into_iter().enumerate().map(Into::into).collect(),
+                    },
                 );
                 tasks.push(tokio::spawn(async move {
                     conn.put_protobuf_cells_with_retry::<entries::Entries>(
@@ -736,7 +766,7 @@ impl LedgerStorage {
                     )
                     .await
                     .map(TaskResult::BytesWritten)
-                    .map_err(TaskError::from)
+                    .map_err(|e| TaskErrorWithType::new(TaskType::UploadEntries, e))
                 }));
             }
         }
@@ -757,8 +787,11 @@ impl LedgerStorage {
                         maybe_first_err = Some(Error::TokioJoinError(err));
                     }
                 }
-                Ok(Err(err)) => {
-                    debug!("HBase: got error result {:?}", err);
+                Ok(Err(TaskErrorWithType { task_type, err })) => {
+                    error!(
+                        "HBase: got error result: type={:?}, error={:?}",
+                        task_type, err
+                    );
                     if maybe_first_err.is_none() {
                         match err {
                             TaskError::HBaseError(hbase_err) => {
@@ -776,12 +809,10 @@ impl LedgerStorage {
                         }
                     }
                 }
-                Ok(Ok(task_result)) => {
-                    match task_result {
-                        TaskResult::BytesWritten(bytes) => _bytes_written += bytes,
-                        TaskResult::CachedTransactions(count) => total_cached_transactions += count,
-                    }
-                }
+                Ok(Ok(task_result)) => match task_result {
+                    TaskResult::BytesWritten(bytes) => _bytes_written += bytes,
+                    TaskResult::CachedTransactions(count) => total_cached_transactions += count,
+                },
             }
         }
 
@@ -791,7 +822,10 @@ impl LedgerStorage {
         }
 
         if self.enable_full_tx_cache {
-            debug!("Cached {} transactions from slot {}",slot, total_cached_transactions);
+            debug!(
+                "Cached {} transactions from slot {}",
+                slot, total_cached_transactions
+            );
         }
 
         let _num_transactions = confirmed_block.transactions.len();
@@ -801,7 +835,7 @@ impl LedgerStorage {
         // `get_confirmed_block()` and `get_confirmed_blocks()`
         let blocks_cells = [(
             slot_to_blocks_key(slot, self.uploader_config.use_md5_row_key_salt),
-            confirmed_block.into()
+            confirmed_block.into(),
         )];
 
         debug!("HBase: calling put_protobuf_cells_with_retry for blocks");
@@ -861,13 +895,15 @@ pub async fn cache_transaction<T>(
     signature: &str,
     transaction: T,
     tx_cache_expiration: Option<std::time::Duration>,
-) ->std::result::Result<(), CacheWriteError>
-    where
-        T: prost::Message,
+) -> std::result::Result<(), CacheWriteError>
+where
+    T: prost::Message,
 {
     let mut buf = Vec::with_capacity(transaction.encoded_len());
 
-    transaction.encode(&mut buf).map_err(CacheWriteError::EncodingError)?;
+    transaction
+        .encode(&mut buf)
+        .map_err(CacheWriteError::EncodingError)?;
 
     let compressed_tx = compress_best(&buf).map_err(CacheWriteError::IoError)?;
 
@@ -885,18 +921,26 @@ pub async fn cache_transaction<T>(
 fn get_account_keys(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> Vec<Pubkey> {
     match &transaction_with_meta.transaction.message {
         VersionedMessage::V0(_) => {
-            let static_keys = transaction_with_meta.transaction.message.static_account_keys();
-            let LoadedAddresses { writable, readonly } = &transaction_with_meta.meta.loaded_addresses;
+            let static_keys = transaction_with_meta
+                .transaction
+                .message
+                .static_account_keys();
+            let LoadedAddresses { writable, readonly } =
+                &transaction_with_meta.meta.loaded_addresses;
 
-            static_keys.iter()
+            static_keys
+                .iter()
                 .chain(writable.iter())
                 .chain(readonly.iter())
                 .cloned()
                 .collect()
-        },
-        VersionedMessage::Legacy(_) => {
-            Vec::from(transaction_with_meta.transaction.message.static_account_keys())
         }
+        VersionedMessage::Legacy(_) => Vec::from(
+            transaction_with_meta
+                .transaction
+                .message
+                .static_account_keys(),
+        ),
     }
 }
 
@@ -910,18 +954,21 @@ fn is_voting_tx(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> b
     has_account(transaction_with_meta, &account_address)
 }
 
-fn has_account(transaction_with_meta: &VersionedTransactionWithStatusMeta, address: &Pubkey) -> bool {
-     transaction_with_meta
-         .transaction
-         .message
-         .static_account_keys()
-         .contains(&address)
+fn has_account(
+    transaction_with_meta: &VersionedTransactionWithStatusMeta,
+    address: &Pubkey,
+) -> bool {
+    transaction_with_meta
+        .transaction
+        .message
+        .static_account_keys()
+        .contains(&address)
 }
 
 fn is_program_account(
     address: &Pubkey,
     transaction_with_meta: &VersionedTransactionWithStatusMeta,
-    combined_keys: &[Pubkey]
+    combined_keys: &[Pubkey],
 ) -> bool {
     // Helper to check if the address is used as a program account in a given instruction
     let check_program_id = |instruction: &CompiledInstruction, account_keys: &[Pubkey]| -> bool {
@@ -930,36 +977,68 @@ fn is_program_account(
     };
 
     // Check in outer instructions
-    let used_in_outer = transaction_with_meta.transaction.message.instructions().iter().any(|instruction| {
-        check_program_id(instruction, combined_keys)
-    });
+    let used_in_outer = transaction_with_meta
+        .transaction
+        .message
+        .instructions()
+        .iter()
+        .any(|instruction| check_program_id(instruction, combined_keys));
 
     // Check in inner instructions
-    let used_in_inner = transaction_with_meta.meta.inner_instructions.as_ref()
+    let used_in_inner = transaction_with_meta
+        .meta
+        .inner_instructions
+        .as_ref()
         .map_or(false, |inner_instructions| {
-            inner_instructions.iter().flat_map(|inner| &inner.instructions)
-                .any(|inner_instruction| check_program_id(&inner_instruction.instruction, combined_keys))
+            inner_instructions
+                .iter()
+                .flat_map(|inner| &inner.instructions)
+                .any(|inner_instruction| {
+                    check_program_id(&inner_instruction.instruction, combined_keys)
+                })
         });
 
     used_in_outer || used_in_inner
 }
 
-fn is_readonly_account(address: &Pubkey, transaction_with_meta: &VersionedTransactionWithStatusMeta) -> bool {
+fn is_readonly_account(
+    address: &Pubkey,
+    transaction_with_meta: &VersionedTransactionWithStatusMeta,
+) -> bool {
     match &transaction_with_meta.transaction.message {
         VersionedMessage::V0(_) => {
-            let static_keys = transaction_with_meta.transaction.message.static_account_keys();
-            let LoadedAddresses { writable, readonly } = &transaction_with_meta.meta.loaded_addresses;
+            let static_keys = transaction_with_meta
+                .transaction
+                .message
+                .static_account_keys();
+            let LoadedAddresses { writable, readonly } =
+                &transaction_with_meta.meta.loaded_addresses;
 
             // Check if the address is in the readonly list
-            readonly.contains(address) || (static_keys.contains(address) &&
-                !writable.contains(address))
-        },
+            readonly.contains(address)
+                || (static_keys.contains(address) && !writable.contains(address))
+        }
         VersionedMessage::Legacy(_) => {
             // In legacy transactions, readonly accounts are determined based on the position in the list.
-            let static_keys = transaction_with_meta.transaction.message.static_account_keys();
-            let num_signers = transaction_with_meta.transaction.message.header().num_required_signatures as usize;
-            let num_readonly_signed = transaction_with_meta.transaction.message.header().num_readonly_signed_accounts as usize;
-            let num_readonly_unsigned = transaction_with_meta.transaction.message.header().num_readonly_unsigned_accounts as usize;
+            let static_keys = transaction_with_meta
+                .transaction
+                .message
+                .static_account_keys();
+            let num_signers = transaction_with_meta
+                .transaction
+                .message
+                .header()
+                .num_required_signatures as usize;
+            let num_readonly_signed = transaction_with_meta
+                .transaction
+                .message
+                .header()
+                .num_readonly_signed_accounts as usize;
+            let num_readonly_unsigned = transaction_with_meta
+                .transaction
+                .message
+                .header()
+                .num_readonly_unsigned_accounts as usize;
 
             let readonly_start_signed = num_signers - num_readonly_signed;
             let readonly_start_unsigned = static_keys.len() - num_readonly_unsigned;
@@ -971,6 +1050,8 @@ fn is_readonly_account(address: &Pubkey, transaction_with_meta: &VersionedTransa
     }
 }
 
-pub(crate) fn convert_to_transaction_with_status_meta(item: VersionedTransactionWithStatusMeta) -> TransactionWithStatusMeta {
+pub(crate) fn convert_to_transaction_with_status_meta(
+    item: VersionedTransactionWithStatusMeta,
+) -> TransactionWithStatusMeta {
     TransactionWithStatusMeta::Complete(item)
 }

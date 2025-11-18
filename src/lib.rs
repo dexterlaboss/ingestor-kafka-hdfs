@@ -1,5 +1,6 @@
 // Re-export common modules for use by binaries
 pub mod block_processor;
+pub mod cli;
 pub mod config;
 pub mod decompressor;
 pub mod entries_parser;
@@ -13,7 +14,6 @@ pub mod message_decoder;
 pub mod queue_consumer;
 pub mod queue_producer;
 pub mod record_stream;
-pub mod cli;
 pub mod json_utils;
 
 

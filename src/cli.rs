@@ -1,21 +1,9 @@
+use crate::ledger_storage::{FilterTxIncludeExclude, LedgerCacheConfig, UploaderConfig};
 use {
-    clap::{
-        App,
-        Arg,
-        ArgMatches,
-        value_t_or_exit,
-        values_t,
-    },
-    solana_clap_utils::{
-        input_validators::{
-            is_pubkey,
-            is_parsable,
-            is_within_range,
-        },
-    },
+    clap::{value_t_or_exit, values_t, App, Arg, ArgMatches},
+    solana_clap_utils::input_validators::{is_parsable, is_pubkey, is_within_range},
     solana_sdk::pubkey::Pubkey,
 };
-use crate::ledger_storage::{FilterTxIncludeExclude, LedgerCacheConfig, UploaderConfig};
 
 const EXCLUDE_TX_FULL_ADDR: &str = "filter-tx-full-exclude-addr";
 const INCLUDE_TX_FULL_ADDR: &str = "filter-tx-full-include-addr";
@@ -299,7 +287,10 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
             .collect();
 
     let tx_full_filter = create_filter(filter_tx_full_exclude_addrs, filter_tx_full_include_addrs);
-    let tx_by_addr_filter = create_filter(filter_tx_by_addr_exclude_addrs, filter_tx_by_addr_include_addrs);
+    let tx_by_addr_filter = create_filter(
+        filter_tx_by_addr_exclude_addrs,
+        filter_tx_by_addr_include_addrs,
+    );
 
     UploaderConfig {
         write_block_entries,
@@ -341,9 +332,11 @@ pub fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
     };
 
     let timeout = if matches.is_present("cache_timeout") {
-        Some(std::time::Duration::from_secs(
-            value_t_or_exit!(matches, "cache_timeout", u64),
-        ))
+        Some(std::time::Duration::from_secs(value_t_or_exit!(
+            matches,
+            "cache_timeout",
+            u64
+        )))
     } else {
         None
     };
