@@ -13,6 +13,7 @@ use {
     solana_transaction_status::EntrySummary,
 };
 use crate::entries_parser::parse_entries_from_value;
+use crate::json_utils::from_value_with_path;
 
 #[async_trait::async_trait]
 pub trait MessageDecoder: Send + Sync {
@@ -45,6 +46,13 @@ impl MessageDecoder for JsonMessageDecoder {
         // Attempt to parse as JSON
         match serde_json::from_str::<Value>(msg_str) {
             Ok(json_val) => {
+                // Support JSON-RPC wrapper: { "jsonrpc": "2.0", "result": { ... }, "id": n }
+                let json_val = if let Some(result) = json_val.get("result") {
+                    result.clone()
+                } else {
+                    json_val
+                };
+
                 // Preferred format: top-level block data with optional entries
                 if let Some(block_id) = json_val["blockID"].as_u64() {
                     let entries = if let Some(entries_value) = json_val.get("entries") {
@@ -54,16 +62,17 @@ impl MessageDecoder for JsonMessageDecoder {
                         vec![]
                     };
 
-                    // Remove entries before parsing into EncodedConfirmedBlock
+                    // Remove non-block fields before parsing into EncodedConfirmedBlock
                     let block_value = if let Some(mut obj) = json_val.as_object().cloned() {
                         let _ = obj.remove("entries");
+                        let _ = obj.remove("blockID");
                         Value::Object(obj)
                     } else {
                         json_val.clone()
                     };
 
-                    let block: EncodedConfirmedBlock = serde_json::from_value(block_value)
-                        .with_context(|| "Failed to parse EncodedConfirmedBlock")?;
+                    let block: EncodedConfirmedBlock = from_value_with_path(block_value, "EncodedConfirmedBlock")
+                        .with_context(|| format!("Failed to parse EncodedConfirmedBlock for blockID {block_id}"))?;
 
                     return Ok(DecodedPayload::BlockWithEntries(block_id, block, entries));
                 }
@@ -73,8 +82,15 @@ impl MessageDecoder for JsonMessageDecoder {
                     let block_value = &json_val["block"];
                     let block_id = block_value["blockID"].as_u64()
                         .ok_or_else(|| anyhow!("Missing block.blockID in payload"))?;
-                    let block: EncodedConfirmedBlock = serde_json::from_value(block_value.clone())
-                        .with_context(|| "Failed to parse EncodedConfirmedBlock from block field")?;
+                    // Remove blockID before parsing block
+                    let cleaned_block_value = if let Some(mut obj) = block_value.as_object().cloned() {
+                        let _ = obj.remove("blockID");
+                        Value::Object(obj)
+                    } else {
+                        block_value.clone()
+                    };
+                    let block: EncodedConfirmedBlock = from_value_with_path(cleaned_block_value, "EncodedConfirmedBlock")
+                        .with_context(|| format!("Failed to parse EncodedConfirmedBlock from block field for blockID {block_id}"))?;
 
                     let entries = if let Some(entries_value) = json_val.get("entries") {
                         parse_entries_from_value(entries_value)

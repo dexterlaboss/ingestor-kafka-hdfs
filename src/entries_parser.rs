@@ -4,6 +4,7 @@ use {
     solana_hash::Hash,
     solana_transaction_status::EntrySummary,
 };
+use crate::json_utils::from_value_with_path;
 
 #[derive(serde::Deserialize)]
 struct JsonEntrySummary {
@@ -24,20 +25,25 @@ pub fn parse_entries_from_value(v: &Value) -> Result<Vec<EntrySummary>> {
     if let Some(arr) = v.as_array() {
         return arr
             .iter()
-            .map(|e| parse_entry_summary(e))
+            .enumerate()
+            .map(|(i, e)| {
+                parse_entry_summary(e)
+                    .with_context(|| format!("Invalid entries element at entries[{i}]"))
+            })
             .collect();
     }
     if let Some(obj) = v.as_object() {
         if let Some(inner) = obj.get("entries") {
             return parse_entries_from_value(inner);
         }
-        return Ok(vec![parse_entry_summary(v)?]);
+        return Ok(vec![parse_entry_summary(v)
+            .with_context(|| "Invalid entries object at entries[0]")?]);
     }
     anyhow::bail!("entries must be an array or object");
 }
 
 pub fn parse_entry_summary(v: &Value) -> Result<EntrySummary> {
-    let je: JsonEntrySummary = serde_json::from_value(v.clone())
+    let je: JsonEntrySummary = from_value_with_path(v.clone(), "EntrySummary")
         .with_context(|| "Invalid entry summary object")?;
     let hash: Hash = je
         .hash

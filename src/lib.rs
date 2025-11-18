@@ -14,5 +14,6 @@ pub mod queue_consumer;
 pub mod queue_producer;
 pub mod record_stream;
 pub mod cli;
+pub mod json_utils;
 
 

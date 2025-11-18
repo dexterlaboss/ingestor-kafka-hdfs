@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /usr/local/bin
 
 # Define environment variables for RPC_VERSION
-ARG RPC_VERSION=1.4.4
+ARG RPC_VERSION=2.3.0
 ENV RPC_VERSION=${RPC_VERSION}
 
 # Download archival-rpc binary from GitHub releases

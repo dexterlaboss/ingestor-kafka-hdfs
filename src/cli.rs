@@ -28,10 +28,22 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
         .about("Solana Block Uploader Service")
         .version(version)
         .arg(
+            Arg::with_name("add_empty_tx_metadata_if_missing")
+                .long("add-empty-tx-metadata-if-missing")
+                .takes_value(false)
+                .help("Add empty transaction metadata if it is missing in input"),
+        )
+        .arg(
             Arg::with_name("write_block_entries")
                 .long("write-block-entries")
                 .takes_value(false)
                 .help("Write block Entries summaries to HBase 'entries' table."),
+        )
+        .arg(
+            Arg::with_name("validate_only")
+                .long("validate-only")
+                .takes_value(false)
+                .help("Validate/parse stdin JSON only; do not connect to HBase/HDFS or write anything."),
         )
         .arg(
             Arg::with_name("disable_tx")

@@ -31,6 +31,10 @@ async fn main() -> Result<()> {
     env_logger::init();
     info!("Starting the Solana block ingestor (Version: {})", SERVICE_VERSION);
 
+    if matches.is_present("add_empty_tx_metadata_if_missing") {
+        std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
+    }
+
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
 

@@ -27,10 +27,52 @@ async fn main() -> Result<()> {
     env_logger::init();
     info!("Starting the Solana block ingestor (stdin) (Version: {})", SERVICE_VERSION);
 
+    if matches.is_present("add_empty_tx_metadata_if_missing") {
+        std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
+    }
+
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
+    let validate_only = matches.is_present("validate_only");
 
     let config = Arc::new(Config::new());
+
+    let decoder: std::sync::Arc<dyn MessageDecoder + Send + Sync> = std::sync::Arc::new(JsonMessageDecoder {});
+
+    // Read NDJSON lines from stdin and either validate-only or process normally
+    let reader = BufReader::new(tokio::io::stdin());
+    let mut lines = reader.lines();
+
+    if validate_only {
+        while let Some(line) = lines.next_line().await? {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match decoder.decode(trimmed.as_bytes()).await {
+                Ok(decoded) => {
+                    match decoded {
+                        ingestor_kafka_hdfs::message_decoder::DecodedPayload::Block(block_id, _) => {
+                            eprintln!("Parsed block (no entries): blockID={}", block_id);
+                        }
+                        ingestor_kafka_hdfs::message_decoder::DecodedPayload::BlockWithEntries(block_id, _, _) => {
+                            eprintln!("Parsed block with entries: blockID={}", block_id);
+                        }
+                        ingestor_kafka_hdfs::message_decoder::DecodedPayload::FilePath(path) => {
+                            eprintln!("Parsed file path payload (unexpected in validate-only): {}", path);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to decode input: {}", e);
+                    for cause in e.chain().skip(1) {
+                        eprintln!("  caused by: {}", cause);
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
 
     let hdfs_client = Client::new(&config.hdfs_url).context("Failed to create HDFS client")?;
     let file_storage = HdfsStorage::new(hdfs_client);
@@ -53,11 +95,6 @@ async fn main() -> Result<()> {
         block_processor,
         decompressor,
     );
-    let decoder: std::sync::Arc<dyn MessageDecoder + Send + Sync> = std::sync::Arc::new(JsonMessageDecoder {});
-
-    // Read NDJSON lines from stdin and feed through the same parser/processor pipeline
-    let reader = BufReader::new(tokio::io::stdin());
-    let mut lines = reader.lines();
 
     while let Some(line) = lines.next_line().await? {
         let trimmed = line.trim();
@@ -67,11 +104,14 @@ async fn main() -> Result<()> {
         match decoder.decode(trimmed.as_bytes()).await {
             Ok(decoded) => {
                 if let Err(e) = processor.process_decoded(decoded).await {
-                    eprintln!("Error processing input: {}", e);
+                    eprintln!("Error processing input: {:#?}", e);
                 }
             }
             Err(e) => {
                 eprintln!("Failed to decode input: {}", e);
+                for cause in e.chain().skip(1) {
+                    eprintln!("  caused by: {}", cause);
+                }
             }
         }
     }
