@@ -1,4 +1,4 @@
-FROM rust:1.83-slim-bullseye AS build
+FROM rust:1.84-slim-bullseye AS build
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
@@ -22,7 +22,7 @@ COPY . /solana
 RUN cargo build --release
 
 
-FROM rust:1.83-slim-bullseye
+FROM rust:1.84-slim-bullseye
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     libssl1.1 \
