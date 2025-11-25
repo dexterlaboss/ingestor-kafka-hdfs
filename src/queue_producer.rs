@@ -22,9 +22,10 @@ pub struct KafkaQueueProducer {
 }
 
 impl KafkaQueueProducer {
-    pub fn new(brokers: &str, topic: &str) -> Result<Self> {
+    pub fn new(brokers: &str, topic: &str, message_max_bytes: u32) -> Result<Self> {
         let producer: FutureProducer = rdkafka::config::ClientConfig::new()
             .set("bootstrap.servers", brokers)
+            .set("message.max.bytes", message_max_bytes.to_string())
             .create()?;
         Ok(Self {
             kafka_producer: producer,
