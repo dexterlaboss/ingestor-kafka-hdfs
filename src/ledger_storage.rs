@@ -9,12 +9,12 @@ use {
     solana_hash::Hash,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
-        instruction::CompiledInstruction,
         message::{v0::LoadedAddresses, VersionedMessage},
         pubkey::Pubkey,
-        sysvar::is_sysvar_id,
         transaction::{TransactionError, VersionedTransaction},
     },
+    agave_reserved_account_keys::ReservedAccountKeys,
+    solana_message::compiled_instruction::CompiledInstruction,
     solana_storage_proto::convert::{entries, tx_by_addr},
     solana_storage_utils::compression::compress_best,
     // extract_memos::extract_and_fmt_memos,
@@ -494,6 +494,7 @@ impl LedgerStorage {
             confirmed_block.blockhash, slot
         );
 
+        let reserved_account_keys = ReservedAccountKeys::new_all_activated();
         let mut tx_cells = vec![];
         let mut full_tx_cells = vec![];
         let mut full_tx_cache = vec![];
@@ -582,7 +583,9 @@ impl LedgerStorage {
                         should_skip_full_tx = true;
                     }
 
-                    if !is_sysvar_id(address) && self.should_include_in_tx_by_addr(address) {
+                    if !reserved_account_keys.is_reserved(address)
+                        && self.should_include_in_tx_by_addr(address)
+                    {
                         by_addr
                             .entry(address)
                             .or_default()

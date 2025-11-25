@@ -1,6 +1,6 @@
 [package]
 name = "ingestor-kafka-hdfs"
-version = "2.6.0"
+version = "3.0.0"
 description = "Solana block ingestor service"
 authors = ["Aurimas Narkevicius <aurimas.n@dexterlab.com>"]
 license = "AGPL-3"
@@ -38,16 +38,21 @@ thrift-pool = "=1.4.0"
 #hdfs = "0.0.4"
 #chrono = { version = "0.4.22", features = ["serde"] }
 backoff = { version = "0.4.0", features = ["tokio"] }
+agave-reserved-account-keys = "=3.0.10"
+
 #solana-binary-encoder = "=1.2.2"
-solana-block-decoder = "=2.1.2"
-solana-storage-utils = "=2.1.2"
-solana-transaction-status = "=2.2.0"
-solana-clap-utils = "=2.2.1"
-solana-sdk = "=2.2.1"
-solana-hash = "=2.2.1"
-solana-storage-proto = "=2.2.0"
-dexter-storage-proto-tx = "=2.1.2"
-solana-version = "=2.2.1"
+solana-block-decoder = "=3.0.1"
+
+solana-storage-utils = "=3.0.1"
+solana-transaction-status = "=3.0.10"
+solana-clap-utils = "=3.0.10"
+solana-sdk = "=3.0.0"
+solana-hash = "=3.0.0"
+solana-storage-proto = "=3.0.10"
+dexter-storage-proto-tx = "=3.0.1"
+solana-version = "=3.0.10"
+solana-message = "=3.0.0"
+
 rust_decimal = "1.0"
 hex = "0.4.3"
 md5 = "0.7"
@@ -77,6 +82,9 @@ features = ["gssapi", "ssl", "sasl", "tokio"]
 version = "0.29.0"
 # git = "https://github.com/fede1024/rust-rdkafka"
 # rev = "65520c820565f9882475cc29cd6d149940515324"
+
+[dependency-overrides]
+solana-sha256-hasher = "=3.0.0"
 
 [[bin]]
 name = "ingestor-kafka-hbase"
