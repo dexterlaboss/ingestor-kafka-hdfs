@@ -6,6 +6,7 @@ use {
     anyhow::Result,
     bytes::BytesMut,
     log::{error, info},
+    serde_json::json,
     std::sync::Arc,
 };
 
@@ -83,12 +84,15 @@ where
     }
 
     async fn send_to_dead_letter(&self, msg: &[u8], error_str: &str) {
-        let dlq_payload = format!(
-            "Failed to process '{}': {}",
-            String::from_utf8_lossy(msg),
-            error_str
-        );
+        let dlq_payload = json!({
+            "message": String::from_utf8_lossy(msg),
+            "error": error_str,
+        })
+        .to_string();
+
         let payload_bytes = BytesMut::from(dlq_payload.as_str());
-        let _ = self.producer.produce_message(payload_bytes, None).await;
+        if let Err(e) = self.producer.produce_message(payload_bytes, None).await {
+            error!("Failed to send to dead-letter queue: {:?}", e);
+        }
     }
 }
