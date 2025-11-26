@@ -870,9 +870,9 @@ dependencies = [
 
 [[package]]
 name = "dexter-storage-proto-tx"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10ab9ac9f5675fdf89fa7d9334b0a44a30568a0880a43af5e7f680130c9d07c9"
+checksum = "c6a54d868b59b4c05ec7d6d74ffc9e3936a3b7565a3669fa3a878887ca778af8"
 dependencies = [
  "bincode",
  "bs58 0.4.0",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "ingestor-kafka-hdfs"
-version = "3.0.2"
+version = "3.1.0"
 dependencies = [
  "agave-reserved-account-keys",
  "anyhow",
@@ -3265,9 +3265,9 @@ dependencies = [
 
 [[package]]
 name = "solana-block-decoder"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4cb2e3012ccb833e5e7620f66dd21c7db6ea729265778c5ca41e589ba540fa9"
+checksum = "8e2b21f760df425efb96de8aa51c03e338ccbb9c0e39769256413950dbc5473b"
 dependencies = [
  "Inflector",
  "base64 0.21.7",
@@ -4293,9 +4293,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-utils"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a033f08c4a20b4bb3759f50e2e4df5f8d715ac767a4a37d943fca0ffee4265f3"
+checksum = "fd0e5512117e48d62034993943aee4ef2cc8cf3bd3938db1450b0f297b61b9e6"
 dependencies = [
  "bincode",
  "bzip2",
@@ -4313,9 +4313,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-writer"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1076998e100d7ff4fe5c4b8f41da999879bfcd5b69fbbc88a35afb1c6462dc38"
+checksum = "906861e9c509229dd80fa7c0ab7320d5e876527d5a5fa20590660bba554e2e46"
 dependencies = [
  "async-trait",
  "log",

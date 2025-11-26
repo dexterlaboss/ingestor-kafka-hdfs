@@ -1,6 +1,6 @@
 [package]
 name = "ingestor-kafka-hdfs"
-version = "3.0.2"
+version = "3.1.0"
 description = "Solana block ingestor service"
 authors = ["Aurimas Narkevicius <aurimas.n@dexterlab.com>"]
 license = "AGPL-3"
@@ -41,15 +41,15 @@ backoff = { version = "0.4.0", features = ["tokio"] }
 agave-reserved-account-keys = "=3.0.10"
 
 #solana-binary-encoder = "=1.2.2"
-solana-block-decoder = "=3.0.1"
+solana-block-decoder = "=3.0.2"
 
-solana-storage-utils = "=3.0.1"
+solana-storage-utils = "=3.0.2"
 solana-transaction-status = "=3.0.10"
 solana-clap-utils = "=3.0.10"
 solana-sdk = "=3.0.0"
 solana-hash = "=3.0.0"
 solana-storage-proto = "=3.0.10"
-dexter-storage-proto-tx = "=3.0.1"
+dexter-storage-proto-tx = "=3.0.2"
 solana-version = "=3.0.10"
 solana-message = "=3.0.0"
 
