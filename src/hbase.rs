@@ -1,5 +1,5 @@
 use {
-    backoff::{future::retry, ExponentialBackoff},
+    backoff::{future::retry_notify, ExponentialBackoff},
     hbase_thrift::hbase::{BatchMutation, HbaseSyncClient, THbaseSyncClient},
     hbase_thrift::MutationBuilder,
     log::*,
@@ -92,12 +92,21 @@ impl HBaseConnection {
     where
         T: serde::ser::Serialize,
     {
-        retry(ExponentialBackoff::default(), || async {
-            let mut client = self.client();
-            Ok(client
-                .put_bincode_cells(table, cells, use_compression, use_wal)
-                .await?)
-        })
+        retry_notify(
+            ExponentialBackoff::default(),
+            || async {
+                let mut client = self.client();
+                Ok(client
+                    .put_bincode_cells(table, cells, use_compression, use_wal)
+                    .await?)
+            },
+            |err, _dur| {
+                error!(
+                    "HBase: put_bincode_cells_with_retry failed with error: {}",
+                    err
+                );
+            },
+        )
         .await
     }
 
@@ -111,12 +120,21 @@ impl HBaseConnection {
     where
         T: prost::Message,
     {
-        retry(ExponentialBackoff::default(), || async {
-            let mut client = self.client();
-            Ok(client
-                .put_protobuf_cells(table, cells, use_compression, use_wal)
-                .await?)
-        })
+        retry_notify(
+            ExponentialBackoff::default(),
+            || async {
+                let mut client = self.client();
+                Ok(client
+                    .put_protobuf_cells(table, cells, use_compression, use_wal)
+                    .await?)
+            },
+            |err, _dur| {
+                error!(
+                    "HBase: put_protobuf_cells_with_retry failed with error: {}",
+                    err
+                );
+            },
+        )
         .await
     }
 }

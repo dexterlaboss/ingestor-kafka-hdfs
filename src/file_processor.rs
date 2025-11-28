@@ -104,12 +104,20 @@ where
         // Create a line-based NDJSON record stream
         let mut record_stream = NdJsonRecordStream::new(decompressed_reader);
 
+        // Record partial processing for dead-letter queue
+        let mut first_line_err: Option<anyhow::Error> = None;
+
         // Read + parse lines
         while let Some(line_result) = record_stream.next_record().await {
             match line_result {
-                Ok(line) => self.process_line(&line).await,
+                Ok(line) => {
+                    if let Err(e) = self.process_line(&line).await {
+                        first_line_err.get_or_insert(e);
+                    }
+                }
                 Err(e) => {
                     error!("Error reading line from file '{file_path}': {e} [Skipping file]");
+                    first_line_err.get_or_insert(e);
                     break;
                 }
             }
@@ -120,11 +128,11 @@ where
             "Finished processing file '{file_path}'. Total time: {} ms",
             duration.as_millis()
         );
-        Ok(())
+        first_line_err.map_or(Ok(()), Err)
     }
 
     /// Process a single line from the record stream.
-    pub async fn process_line(&self, line: &str) {
+    pub async fn process_line(&self, line: &str) -> Result<()> {
         match self.parser.parse_record(line) {
             Ok(Some((block_id, block, entries))) => {
                 if let Err(err) = self
@@ -133,6 +141,7 @@ where
                     .await
                 {
                     error!("Error handling block: {err}");
+                    return Err(err.context(format!("Failed to handle block ID {}", block_id)));
                 }
             }
             Ok(None) => {
@@ -140,7 +149,9 @@ where
             }
             Err(e) => {
                 error!("Failed to parse record: {e}");
+                return Err(e);
             }
         }
+        Ok(())
     }
 }
