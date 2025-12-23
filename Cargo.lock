@@ -870,9 +870,9 @@ dependencies = [
 
 [[package]]
 name = "dexter-storage-proto-tx"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6a54d868b59b4c05ec7d6d74ffc9e3936a3b7565a3669fa3a878887ca778af8"
+checksum = "9eaefd464ec2a8ce2b0b1825fd065b41e1c023e019bb711988bec0fd157f9824"
 dependencies = [
  "bincode",
  "bs58 0.4.0",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "ingestor-kafka-hdfs"
-version = "3.1.1"
+version = "3.1.2"
 dependencies = [
  "agave-reserved-account-keys",
  "anyhow",
@@ -3265,9 +3265,9 @@ dependencies = [
 
 [[package]]
 name = "solana-block-decoder"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e2b21f760df425efb96de8aa51c03e338ccbb9c0e39769256413950dbc5473b"
+checksum = "ebeed1be709156721828fd27286ac105e704d05cbe1dc9d96721b230e7232926"
 dependencies = [
  "Inflector",
  "base64 0.21.7",
@@ -3725,18 +3725,18 @@ dependencies = [
 
 [[package]]
 name = "solana-message"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c33e9fa7871147ac3235a7320386afa2dc64bbb21ca3cf9d79a6f6827313176"
+checksum = "85666605c9fd727f865ed381665db0a8fc29f984a030ecc1e40f43bfb2541623"
 dependencies = [
  "bincode",
  "blake3",
  "lazy_static",
  "serde",
  "serde_derive",
+ "solana-address 1.1.0",
  "solana-hash",
  "solana-instruction",
- "solana-pubkey",
  "solana-sanitize",
  "solana-sdk-ids",
  "solana-short-vec",
@@ -4293,9 +4293,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-utils"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd0e5512117e48d62034993943aee4ef2cc8cf3bd3938db1450b0f297b61b9e6"
+checksum = "9d30be7799dcdb3277871da76f106bad406005e94ef1dc1a118d478128129a61"
 dependencies = [
  "bincode",
  "bzip2",
@@ -4313,9 +4313,9 @@ dependencies = [
 
 [[package]]
 name = "solana-storage-writer"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "906861e9c509229dd80fa7c0ab7320d5e876527d5a5fa20590660bba554e2e46"
+checksum = "44a8cdc0418ff603f8fb3a4b19e8317b19aed1d1614071a87e6266d36d663e31"
 dependencies = [
  "async-trait",
  "log",
@@ -4402,17 +4402,18 @@ checksum = "0ced92c60aa76ec4780a9d93f3bd64dfa916e1b998eacc6f1c110f3f444f02c9"
 
 [[package]]
 name = "solana-transaction"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2db6ac3984042d9248fd9b06761ece438ed9ba412c001240052ce6216fee3141"
+checksum = "64928e6af3058dcddd6da6680cbe08324b4e071ad73115738235bbaa9e9f72a5"
 dependencies = [
  "bincode",
  "serde",
  "serde_derive",
+ "solana-address 1.1.0",
  "solana-hash",
  "solana-instruction",
+ "solana-instruction-error",
  "solana-message",
- "solana-pubkey",
  "solana-sanitize",
  "solana-sdk-ids",
  "solana-short-vec",
