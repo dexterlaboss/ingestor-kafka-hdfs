@@ -31,6 +31,8 @@ use {
 
 /// A work item containing all information needed to process a message.
 struct WorkItem {
+    /// The topic this message came from.
+    topic: String,
     /// The partition this message came from.
     partition: i32,
     /// The offset of this message.
@@ -66,15 +68,13 @@ impl ParallelIngestor {
     ///
     /// # Arguments
     ///
-    /// * `consumer` - The Kafka consumer
-    /// * `topic` - The topic to consume from
+    /// * `consumer` - The Kafka consumer (already subscribed to topics)
     /// * `producer` - The dead-letter queue producer
     /// * `processor` - The message processor
     /// * `decoder` - The message decoder
     /// * `num_workers` - Number of worker tasks (recommend: num_cpus)
     pub fn new<P>(
         consumer: Arc<StreamConsumer>,
-        topic: String,
         producer: P,
         processor: Arc<dyn Processor + Send + Sync>,
         decoder: Arc<dyn MessageDecoder + Send + Sync>,
@@ -83,7 +83,9 @@ impl ParallelIngestor {
     where
         P: QueueProducer + Send + Sync + 'static,
     {
-        let offset_tracker = Arc::new(OffsetTracker::new(consumer.clone(), topic));
+        let num_workers = num_workers.max(1);
+
+        let offset_tracker = Arc::new(OffsetTracker::new(consumer.clone()));
 
         Self {
             consumer,
@@ -156,14 +158,15 @@ impl ParallelIngestor {
                 }
             };
 
+            let topic = msg.topic().to_string();
             let partition = msg.partition();
             let offset = msg.offset();
 
-            self.offset_tracker.register_partition(partition);
-            if let Err(e) = self.offset_tracker.track(partition, offset) {
+            self.offset_tracker.register_partition(&topic, partition);
+            if let Err(e) = self.offset_tracker.track(&topic, partition, offset) {
                 error!(
-                    "Failed to track offset partition={} offset={}: {:?}",
-                    partition, offset, e
+                    "Failed to track offset topic={} partition={} offset={}: {:?}",
+                    topic, partition, offset, e
                 );
                 continue;
             }
@@ -171,11 +174,11 @@ impl ParallelIngestor {
             let payload_bytes = match msg.payload() {
                 Some(bytes) => bytes,
                 None => {
-                    warn!("Empty payload at partition={} offset={}", partition, offset);
-                    if let Err(e) = self.offset_tracker.complete(partition, offset) {
+                    warn!("Empty payload at topic={} partition={} offset={}", topic, partition, offset);
+                    if let Err(e) = self.offset_tracker.complete(&topic, partition, offset) {
                         error!(
-                            "Failed to complete offset partition={} offset={}: {:?}",
-                            partition, offset, e
+                            "Failed to complete offset topic={} partition={} offset={}: {:?}",
+                            topic, partition, offset, e
                         );
                     }
                     continue;
@@ -188,14 +191,14 @@ impl ParallelIngestor {
                 Ok(decoded) => decoded,
                 Err(e) => {
                     error!(
-                        "Failed to decode message at partition={} offset={}: {:?}",
-                        partition, offset, e
+                        "Failed to decode message at topic={} partition={} offset={}: {:?}",
+                        topic, partition, offset, e
                     );
                     send_to_dead_letter(&*self.producer, &raw_payload, &e.to_string()).await;
-                    if let Err(e) = self.offset_tracker.complete(partition, offset) {
+                    if let Err(e) = self.offset_tracker.complete(&topic, partition, offset) {
                         error!(
-                            "Failed to complete offset partition={} offset={}: {:?}",
-                            partition, offset, e
+                            "Failed to complete offset topic={} partition={} offset={}: {:?}",
+                            topic, partition, offset, e
                         );
                     }
                     continue;
@@ -203,6 +206,7 @@ impl ParallelIngestor {
             };
 
             let work_item = WorkItem {
+                topic,
                 partition,
                 offset,
                 payload: decoded,
@@ -228,8 +232,8 @@ async fn worker_loop(
     producer: Arc<dyn QueueProducer + Send + Sync>,
 ) {
     while let Ok(work_item) = rx.recv().await {
-
         let WorkItem {
+            topic,
             partition,
             offset,
             payload,
@@ -237,30 +241,31 @@ async fn worker_loop(
         } = work_item;
 
         info!(
-            "Worker {} processing partition={} offset={}",
-            worker_id, partition, offset
+            "Worker {} processing topic={} partition={} offset={}",
+            worker_id, topic, partition, offset
         );
 
         let result = processor.process_decoded(payload).await;
 
         if let Err(e) = &result {
             error!(
-                "Worker {} failed to process partition={} offset={}: {:?}",
-                worker_id, partition, offset, e
+                "Worker {} failed to process topic={} partition={} offset={}: {:?}",
+                worker_id, topic, partition, offset, e
             );
             send_to_dead_letter(&*producer, &raw_payload, &e.to_string()).await;
         }
 
-        if let Err(e) = offset_tracker.complete(partition, offset) {
+        if let Err(e) = offset_tracker.complete(&topic, partition, offset) {
             error!(
-                "Worker {} failed to complete offset partition={} offset={}: {:?}",
-                worker_id, partition, offset, e
+                "Worker {} failed to complete offset topic={} partition={} offset={}: {:?}",
+                worker_id, topic, partition, offset, e
             );
         }
 
         info!(
-            "Worker {} completed partition={} offset={} success={}",
+            "Worker {} completed topic={} partition={} offset={} success={}",
             worker_id,
+            topic,
             partition,
             offset,
             result.is_ok()

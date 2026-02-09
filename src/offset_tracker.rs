@@ -6,7 +6,7 @@
 //!
 //! # Design
 //!
-//! For each partition, we track:
+//! For each (topic, partition), we track:
 //! - `in_flight`: offsets currently being processed
 //! - `completed`: offsets that finished processing but can't be committed yet
 //! - `last_committed`: the highest offset we've successfully committed
@@ -25,6 +25,8 @@ use {
     },
     std::{collections::BTreeSet, sync::Arc},
 };
+
+type TopicPartition = (String, i32);
 
 /// Tracks the state of offsets for a single partition.
 #[derive(Debug, Default)]
@@ -60,36 +62,36 @@ impl PartitionState {
     }
 }
 
-/// Thread-safe offset tracker for a single topic.
+/// Thread-safe offset tracker supporting multiple topics.
 pub struct OffsetTracker {
-    /// The topic being tracked.
-    topic: String,
-    /// Per-partition state.
-    partitions: DashMap<i32, PartitionState>,
+    /// Per-(topic, partition) state.
+    partitions: DashMap<TopicPartition, PartitionState>,
     /// The Kafka consumer used for committing offsets.
     consumer: Arc<StreamConsumer>,
 }
 
 impl OffsetTracker {
-    pub fn new(consumer: Arc<StreamConsumer>, topic: String) -> Self {
+    pub fn new(consumer: Arc<StreamConsumer>) -> Self {
         Self {
-            topic,
             partitions: DashMap::new(),
             consumer,
         }
     }
 
-    /// Register a partition for tracking.
-    pub fn register_partition(&self, partition: i32) {
-        self.partitions.entry(partition).or_default();
+    /// Register a topic-partition for tracking.
+    pub fn register_partition(&self, topic: &str, partition: i32) {
+        self.partitions
+            .entry((topic.to_string(), partition))
+            .or_default();
     }
 
     /// Track a new message as in-flight.
-    pub fn track(&self, partition: i32, offset: i64) -> Result<()> {
+    pub fn track(&self, topic: &str, partition: i32, offset: i64) -> Result<()> {
+        let key = (topic.to_string(), partition);
         let mut state = self
             .partitions
-            .get_mut(&partition)
-            .ok_or_else(|| anyhow::anyhow!("Partition {} not registered", partition))?;
+            .get_mut(&key)
+            .ok_or_else(|| anyhow::anyhow!("Topic {} partition {} not registered", topic, partition))?;
 
         state.in_flight.insert(offset);
 
@@ -97,13 +99,15 @@ impl OffsetTracker {
     }
 
     /// Mark an offset as complete and attempt to commit if watermark advances.
-    pub fn complete(&self, partition: i32, offset: i64) -> Result<()> {
+    pub fn complete(&self, topic: &str, partition: i32, offset: i64) -> Result<()> {
+        let key = (topic.to_string(), partition);
+
         // Phase 1: Update state and determine if commit is needed
         let commit_info = {
             let mut state = self
                 .partitions
-                .get_mut(&partition)
-                .ok_or_else(|| anyhow::anyhow!("Partition {} not registered", partition))?;
+                .get_mut(&key)
+                .ok_or_else(|| anyhow::anyhow!("Topic {} partition {} not registered", topic, partition))?;
 
             state.in_flight.remove(&offset);
             state.completed.insert(offset);
@@ -121,19 +125,19 @@ impl OffsetTracker {
 
         // Phase 2: Perform commit
         if let Some(commit_offset) = commit_info {
-            let commit_result = self.commit_offset(partition, commit_offset);
+            let commit_result = self.commit_offset(topic, partition, commit_offset);
 
             if commit_result.is_ok() {
                 // Phase 3: Update state after successful commit
-                if let Some(mut state) = self.partitions.get_mut(&partition) {
+                if let Some(mut state) = self.partitions.get_mut(&key) {
                     if commit_offset > state.last_committed {
                         // Retain only completed offsets >= commit_offset (not yet committed)
                         state.completed.retain(|&o| o >= commit_offset);
                         state.last_committed = commit_offset;
 
                         info!(
-                            "Committed offset {} for partition {}",
-                            commit_offset, partition
+                            "Committed offset {} for topic {} partition {}",
+                            commit_offset, topic, partition
                         );
                     }
                 }
@@ -145,18 +149,18 @@ impl OffsetTracker {
         Ok(())
     }
 
-    /// Commit a specific offset for a partition.
-    fn commit_offset(&self, partition: i32, offset: i64) -> Result<()> {
+    /// Commit a specific offset for a topic-partition.
+    fn commit_offset(&self, topic: &str, partition: i32, offset: i64) -> Result<()> {
         let mut tpl = TopicPartitionList::new();
-        tpl.add_partition_offset(&self.topic, partition, rdkafka::Offset::Offset(offset))
+        tpl.add_partition_offset(topic, partition, rdkafka::Offset::Offset(offset))
             .map_err(|e| anyhow::anyhow!("Failed to add partition offset: {:?}", e))?;
 
         self.consumer
             .commit(&tpl, rdkafka::consumer::CommitMode::Async)
             .map_err(|e| {
                 error!(
-                    "Failed to commit offset {} for partition {}: {:?}",
-                    offset, partition, e
+                    "Failed to commit offset {} for topic {} partition {}: {:?}",
+                    offset, topic, partition, e
                 );
                 anyhow::anyhow!("Commit error: {:?}", e)
             })?;
@@ -233,11 +237,11 @@ mod tests {
         use std::thread;
 
         // Create a DashMap directly for testing (without Kafka consumer)
-        let partitions: DashMap<i32, PartitionState> = DashMap::new();
+        let partitions: DashMap<TopicPartition, PartitionState> = DashMap::new();
 
         // Pre-register all partitions
         for partition in 0..4 {
-            partitions.insert(partition, PartitionState::default());
+            partitions.insert(("test-topic".to_string(), partition), PartitionState::default());
         }
 
         let partitions = Arc::new(partitions);
@@ -247,16 +251,17 @@ mod tests {
         for partition in 0..4 {
             let partitions = partitions.clone();
             let handle = thread::spawn(move || {
+                let key = ("test-topic".to_string(), partition);
                 for offset in 0..100 {
                     // Track
                     {
-                        let mut state = partitions.get_mut(&partition).unwrap();
+                        let mut state = partitions.get_mut(&key).unwrap();
                         state.in_flight.insert(offset);
                     }
 
                     // Complete
                     {
-                        let mut state = partitions.get_mut(&partition).unwrap();
+                        let mut state = partitions.get_mut(&key).unwrap();
                         state.in_flight.remove(&offset);
                         state.completed.insert(offset);
                     }
@@ -272,7 +277,7 @@ mod tests {
 
         // Verify all partitions have correct state
         for partition in 0..4 {
-            let state = partitions.get(&partition).unwrap();
+            let state = partitions.get(&("test-topic".to_string(), partition)).unwrap();
             assert_eq!(state.in_flight.len(), 0);
             assert_eq!(state.completed.len(), 100);
         }
@@ -283,10 +288,10 @@ mod tests {
         // Test that multiple threads accessing the same partition works correctly
         use std::thread;
 
-        let partitions: DashMap<i32, PartitionState> = DashMap::new();
+        let partitions: DashMap<TopicPartition, PartitionState> = DashMap::new();
 
         // Pre-register partition 0
-        partitions.insert(0, PartitionState::default());
+        partitions.insert(("test-topic".to_string(), 0), PartitionState::default());
 
         let partitions = Arc::new(partitions);
         let mut handles = vec![];
@@ -297,13 +302,14 @@ mod tests {
         for thread_id in 0..num_threads {
             let partitions = partitions.clone();
             let handle = thread::spawn(move || {
+                let key = ("test-topic".to_string(), 0);
                 let start_offset = thread_id * offsets_per_thread;
                 for i in 0..offsets_per_thread {
                     let offset = (start_offset + i) as i64;
 
                     // Track
                     {
-                        let mut state = partitions.get_mut(&0).unwrap();
+                        let mut state = partitions.get_mut(&key).unwrap();
                         state.in_flight.insert(offset);
                     }
 
@@ -312,7 +318,7 @@ mod tests {
 
                     // Complete
                     {
-                        let mut state = partitions.get_mut(&0).unwrap();
+                        let mut state = partitions.get_mut(&key).unwrap();
                         state.in_flight.remove(&offset);
                         state.completed.insert(offset);
                     }
@@ -327,7 +333,7 @@ mod tests {
         }
 
         // Verify partition 0 has correct state
-        let state = partitions.get(&0).unwrap();
+        let state = partitions.get(&("test-topic".to_string(), 0)).unwrap();
         assert_eq!(state.in_flight.len(), 0);
         assert_eq!(
             state.completed.len(),
@@ -373,5 +379,63 @@ mod tests {
         state.completed.insert(3);
         // All done (0,1,2,3,4), commit offset is 5
         assert_eq!(state.committable_offset(), Some(5));
+    }
+
+    #[test]
+    fn test_multi_topic_isolation() {
+        // Test that different topics don't interfere with each other
+        use std::thread;
+
+        let partitions: DashMap<TopicPartition, PartitionState> = DashMap::new();
+
+        // Register same partition (0) on two different topics
+        partitions.insert(("topic-a".to_string(), 0), PartitionState::default());
+        partitions.insert(("topic-b".to_string(), 0), PartitionState::default());
+
+        let partitions = Arc::new(partitions);
+        let mut handles = vec![];
+
+        // Thread for topic-a
+        {
+            let partitions = partitions.clone();
+            let handle = thread::spawn(move || {
+                let key = ("topic-a".to_string(), 0);
+                for offset in 0..50 {
+                    let mut state = partitions.get_mut(&key).unwrap();
+                    state.in_flight.insert(offset);
+                    state.in_flight.remove(&offset);
+                    state.completed.insert(offset);
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Thread for topic-b
+        {
+            let partitions = partitions.clone();
+            let handle = thread::spawn(move || {
+                let key = ("topic-b".to_string(), 0);
+                for offset in 0..100 {
+                    let mut state = partitions.get_mut(&key).unwrap();
+                    state.in_flight.insert(offset);
+                    state.in_flight.remove(&offset);
+                    state.completed.insert(offset);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify isolation - each topic has its own count
+        let state_a = partitions.get(&("topic-a".to_string(), 0)).unwrap();
+        assert_eq!(state_a.completed.len(), 50);
+        assert_eq!(state_a.committable_offset(), Some(50));
+
+        let state_b = partitions.get(&("topic-b".to_string(), 0)).unwrap();
+        assert_eq!(state_b.completed.len(), 100);
+        assert_eq!(state_b.committable_offset(), Some(100));
     }
 }

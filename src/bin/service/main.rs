@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
 
     let message_max_bytes = kafka_config.max_partition_fetch_bytes;
 
-    let consumer = create_stream_consumer(kafka_config, &[&config.kafka_consume_topic])
+    let consumer = create_stream_consumer(kafka_config, &[config.kafka_consume_topic.as_str()])
         .context("Failed to create Kafka consumer")?;
 
     let kafka_producer = KafkaQueueProducer::new(
@@ -99,7 +99,6 @@ async fn main() -> Result<()> {
 
     let ingestor = ParallelIngestor::new(
         consumer,
-        config.kafka_consume_topic.clone(),
         kafka_producer,
         file_processor,
         message_decoder,
