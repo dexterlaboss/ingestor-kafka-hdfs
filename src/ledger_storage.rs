@@ -6,7 +6,6 @@ use {
     log::{debug, error, info},
     memcache::{Client, MemcacheError},
     serde::{Deserialize, Serialize},
-    solana_hash::Hash,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         message::{v0::LoadedAddresses, VersionedMessage},
@@ -19,7 +18,7 @@ use {
     solana_storage_utils::compression::compress_best,
     // extract_memos::extract_and_fmt_memos,
     solana_transaction_status::{
-        extract_memos::extract_and_fmt_memos, ConfirmedTransactionWithStatusMeta, EntrySummary,
+        extract_memos::extract_and_fmt_memos, ConfirmedTransactionWithStatusMeta,
         TransactionByAddrInfo, VersionedConfirmedBlock, VersionedConfirmedBlockWithEntries,
         VersionedTransactionWithStatusMeta,
     },

@@ -230,6 +230,15 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                 .takes_value(false)
                 .help("If HBase should skip WAL when writing new data."),
         )
+        .arg(
+            Arg::with_name("workers")
+                .long("workers")
+                .short("w")
+                .value_name("NUM")
+                .takes_value(true)
+                .validator(is_parsable::<usize>)
+                .help("Number of worker threads for parallel processing (default: number of CPUs)"),
+        )
     ;
 }
 

@@ -6,15 +6,37 @@ use {
         consumer::{CommitMode, Consumer, StreamConsumer},
         Message as RDKafkaMessage,
     },
+    std::sync::Arc,
 };
 
+/// A message received from the queue with optional metadata.
 pub struct QueueMessage<T> {
     internal: T,
+    /// Topic this message came from
+    pub topic: Option<String>,
+    /// Partition this message came from
+    pub partition: Option<i32>,
+    /// Offset of this message
+    pub offset: Option<i64>,
 }
 
 impl<T> QueueMessage<T> {
     pub fn new(internal: T) -> Self {
-        Self { internal }
+        Self {
+            internal,
+            topic: None,
+            partition: None,
+            offset: None,
+        }
+    }
+
+    pub fn with_metadata(internal: T, topic: String, partition: i32, offset: i64) -> Self {
+        Self {
+            internal,
+            topic: Some(topic),
+            partition: Some(partition),
+            offset: Some(offset),
+        }
     }
 
     pub fn internal(&self) -> &T {
@@ -64,13 +86,45 @@ impl Default for KafkaConfig {
             bootstrap_servers: "localhost:9092".to_string(),
             enable_partition_eof: false,
             session_timeout_ms: 10000,
-            enable_auto_commit: true,
+            // Default to false for manual offset management in parallel processing
+            enable_auto_commit: false,
             auto_offset_reset: "earliest".to_string(),
             max_partition_fetch_bytes: 10 * 1024 * 1024, // 10 MiB
             max_in_flight_requests_per_connection: 1,
             log_level: RDKafkaLogLevel::Debug,
         }
     }
+}
+
+/// Creates a raw `StreamConsumer` for use with `ParallelIngestor`.
+///
+/// This returns an `Arc<StreamConsumer>` that can be shared between the
+/// consumer loop and the offset tracker for manual offset commits.
+pub fn create_stream_consumer(config: KafkaConfig, topics: &[&str]) -> Result<Arc<StreamConsumer>> {
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", &config.group_id)
+        .set("bootstrap.servers", &config.bootstrap_servers)
+        .set(
+            "enable.partition.eof",
+            config.enable_partition_eof.to_string(),
+        )
+        .set("session.timeout.ms", config.session_timeout_ms.to_string())
+        .set("enable.auto.commit", config.enable_auto_commit.to_string())
+        .set("auto.offset.reset", &config.auto_offset_reset)
+        .set(
+            "max.partition.fetch.bytes",
+            config.max_partition_fetch_bytes.to_string(),
+        )
+        .set(
+            "max.in.flight.requests.per.connection",
+            config.max_in_flight_requests_per_connection.to_string(),
+        )
+        .set_log_level(config.log_level)
+        .create()?;
+
+    consumer.subscribe(topics)?;
+
+    Ok(Arc::new(consumer))
 }
 
 /// Kafka queue consumer.
@@ -116,12 +170,20 @@ impl QueueConsumer for KafkaQueueConsumer {
     async fn next_message(&mut self) -> Option<Result<QueueMessage<String>>> {
         match self.kafka_consumer.recv().await {
             Ok(msg) => {
-                // Convert the payload bytes into a String
+                let topic = msg.topic().to_string();
+                let partition = msg.partition();
+                let offset = msg.offset();
+
                 let payload_str = match msg.payload() {
                     Some(bytes) => String::from_utf8_lossy(bytes).to_string(),
                     None => String::new(),
                 };
-                Some(Ok(QueueMessage::new(payload_str)))
+                Some(Ok(QueueMessage::with_metadata(
+                    payload_str,
+                    topic,
+                    partition,
+                    offset,
+                )))
             }
             Err(e) => Some(Err(anyhow::anyhow!("Kafka error: {}", e))),
         }

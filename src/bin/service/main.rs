@@ -1,6 +1,5 @@
 use {
     anyhow::{Context, Result},
-    clap::ArgMatches,
     hdfs_native::Client,
     ingestor_kafka_hdfs::{
         block_processor::BlockProcessor,
@@ -10,10 +9,10 @@ use {
         file_processor::FileProcessor,
         file_storage::HdfsStorage,
         format_parser::{FormatParser, NdJsonParser},
-        ingestor::Ingestor,
-        ledger_storage::{LedgerCacheConfig, LedgerStorage, LedgerStorageConfig, UploaderConfig},
+        ledger_storage::{LedgerStorage, LedgerStorageConfig},
         message_decoder::{JsonMessageDecoder, MessageDecoder},
-        queue_consumer::{KafkaConfig, KafkaQueueConsumer, QueueConsumer},
+        parallel_ingestor::ParallelIngestor,
+        queue_consumer::{create_stream_consumer, KafkaConfig},
         queue_producer::KafkaQueueProducer,
     },
     log::info,
@@ -37,6 +36,13 @@ async fn main() -> Result<()> {
     if matches.is_present("add_empty_tx_metadata_if_missing") {
         std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
     }
+
+    let num_workers: usize = matches
+        .value_of("workers")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(num_cpus::get);
+
+    info!("Using {} worker threads for parallel processing", num_workers);
 
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
@@ -72,7 +78,7 @@ async fn main() -> Result<()> {
         bootstrap_servers: config.kafka_brokers.clone(),
         enable_partition_eof: false,
         session_timeout_ms: 10000,
-        enable_auto_commit: true,
+        enable_auto_commit: false,
         auto_offset_reset: "earliest".to_string(),
         max_partition_fetch_bytes: 10 * 1024 * 1024,
         max_in_flight_requests_per_connection: 1,
@@ -80,8 +86,9 @@ async fn main() -> Result<()> {
     };
 
     let message_max_bytes = kafka_config.max_partition_fetch_bytes;
-    let consumer: Box<dyn QueueConsumer + Send + Sync> =
-        Box::new(KafkaQueueConsumer::new(kafka_config, &[&config.kafka_consume_topic]).unwrap());
+
+    let consumer = create_stream_consumer(kafka_config, &[&config.kafka_consume_topic])
+        .context("Failed to create Kafka consumer")?;
 
     let kafka_producer = KafkaQueueProducer::new(
         &config.kafka_brokers,
@@ -90,7 +97,14 @@ async fn main() -> Result<()> {
         message_max_bytes,
     )?;
 
-    let mut ingestor = Ingestor::new(consumer, kafka_producer, file_processor, message_decoder);
+    let ingestor = ParallelIngestor::new(
+        consumer,
+        config.kafka_consume_topic.clone(),
+        kafka_producer,
+        file_processor,
+        message_decoder,
+        num_workers,
+    );
 
     ingestor.run().await?;
 
