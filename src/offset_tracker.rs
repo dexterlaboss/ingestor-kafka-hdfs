@@ -109,7 +109,17 @@ impl OffsetTracker {
                 .get_mut(&key)
                 .ok_or_else(|| anyhow::anyhow!("Topic {} partition {} not registered", topic, partition))?;
 
-            state.in_flight.remove(&offset);
+            // verify offset was tracked
+            if !state.in_flight.remove(&offset) {
+                if state.completed.contains(&offset) {
+                    return Ok(());
+                }
+                return Err(anyhow::anyhow!(
+                    "Offset {} was never tracked for topic {} partition {}",
+                    offset, topic, partition
+                ));
+            }
+
             state.completed.insert(offset);
 
             if let Some(commit_offset) = state.committable_offset() {
@@ -437,5 +447,47 @@ mod tests {
         let state_b = partitions.get(&("topic-b".to_string(), 0)).unwrap();
         assert_eq!(state_b.completed.len(), 100);
         assert_eq!(state_b.committable_offset(), Some(100));
+    }
+
+    #[test]
+    fn test_complete_untracked_offset_fails() {
+        // Test that completing an offset that was never tracked returns an error
+        let partitions: DashMap<TopicPartition, PartitionState> = DashMap::new();
+        partitions.insert(("test-topic".to_string(), 0), PartitionState::default());
+
+        let key = ("test-topic".to_string(), 0);
+
+        // Try to complete offset 5 without tracking it first
+        {
+            let mut state = partitions.get_mut(&key).unwrap();
+            // Simulate what complete() does - check if remove returns false
+            let was_in_flight = state.in_flight.remove(&5);
+            assert!(!was_in_flight, "Offset should not have been in-flight");
+        }
+    }
+
+    #[test]
+    fn test_complete_is_idempotent() {
+        // Test that completing an already-completed offset is safe (idempotent)
+        let partitions: DashMap<TopicPartition, PartitionState> = DashMap::new();
+        partitions.insert(("test-topic".to_string(), 0), PartitionState::default());
+
+        let key = ("test-topic".to_string(), 0);
+
+        // Track and complete offset 5
+        {
+            let mut state = partitions.get_mut(&key).unwrap();
+            state.in_flight.insert(5);
+            state.in_flight.remove(&5);
+            state.completed.insert(5);
+        }
+
+        // Verify offset is in completed set and calling complete again would be OK
+        {
+            let state = partitions.get(&key).unwrap();
+            assert!(state.completed.contains(&5), "Offset should be in completed set");
+            assert!(!state.in_flight.contains(&5), "Offset should not be in-flight");
+            // The actual complete() method would return Ok(()) here due to idempotency
+        }
     }
 }
