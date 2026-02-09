@@ -156,17 +156,28 @@ impl ParallelIngestor {
                 }
             };
 
-            let topic = msg.topic().to_string();
             let partition = msg.partition();
             let offset = msg.offset();
+
+            self.offset_tracker.register_partition(partition);
+            if let Err(e) = self.offset_tracker.track(partition, offset) {
+                error!(
+                    "Failed to track offset partition={} offset={}: {:?}",
+                    partition, offset, e
+                );
+                continue;
+            }
 
             let payload_bytes = match msg.payload() {
                 Some(bytes) => bytes,
                 None => {
-                    warn!(
-                        "Empty payload at topic={} partition={} offset={}",
-                        topic, partition, offset
-                    );
+                    warn!("Empty payload at partition={} offset={}", partition, offset);
+                    if let Err(e) = self.offset_tracker.complete(partition, offset) {
+                        error!(
+                            "Failed to complete offset partition={} offset={}: {:?}",
+                            partition, offset, e
+                        );
+                    }
                     continue;
                 }
             };
@@ -180,20 +191,16 @@ impl ParallelIngestor {
                         "Failed to decode message at partition={} offset={}: {:?}",
                         partition, offset, e
                     );
-                    self.send_to_dead_letter(&raw_payload, &e.to_string())
-                        .await;
+                    send_to_dead_letter(&*self.producer, &raw_payload, &e.to_string()).await;
+                    if let Err(e) = self.offset_tracker.complete(partition, offset) {
+                        error!(
+                            "Failed to complete offset partition={} offset={}: {:?}",
+                            partition, offset, e
+                        );
+                    }
                     continue;
                 }
             };
-
-            self.offset_tracker.register_partition(partition);
-            if let Err(e) = self.offset_tracker.track(partition, offset) {
-                error!(
-                    "Failed to track offset partition={} offset={}: {:?}",
-                    partition, offset, e
-                );
-                continue;
-            }
 
             let work_item = WorkItem {
                 partition,
@@ -210,19 +217,6 @@ impl ParallelIngestor {
         }
 
         Ok(())
-    }
-
-    async fn send_to_dead_letter(&self, msg: &str, error_str: &str) {
-        let dlq_payload = json!({
-            "message": msg,
-            "error": error_str,
-        })
-        .to_string();
-
-        let payload_bytes = BytesMut::from(dlq_payload.as_str());
-        if let Err(e) = self.producer.produce_message(payload_bytes, None).await {
-            error!("Failed to send to dead-letter queue: {:?}", e);
-        }
     }
 }
 

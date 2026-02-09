@@ -236,7 +236,17 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                 .short("w")
                 .value_name("NUM")
                 .takes_value(true)
-                .validator(is_parsable::<usize>)
+                .validator(|s| {
+                    s.parse::<usize>()
+                        .map_err(|e| e.to_string())
+                        .and_then(|n| {
+                            if n == 0 {
+                                Err("workers must be at least 1".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        })
+                })
                 .help("Number of worker threads for parallel processing (default: number of CPUs)"),
         )
     ;
