@@ -1,5 +1,6 @@
 use {
     anyhow::{Context, Result},
+    clap::ArgMatches,
     hdfs_native::Client,
     ingestor_kafka_hdfs::{
         block_processor::BlockProcessor,
@@ -9,9 +10,9 @@ use {
         file_processor::FileProcessor,
         file_storage::HdfsStorage,
         format_parser::{FormatParser, NdJsonParser},
+        ingestor::Ingestor,
         ledger_storage::{LedgerStorage, LedgerStorageConfig},
         message_decoder::{JsonMessageDecoder, MessageDecoder},
-        ingestor::Ingestor,
         queue_consumer::{create_stream_consumer, KafkaConfig},
         queue_producer::KafkaQueueProducer,
     },
@@ -22,27 +23,37 @@ use {
 
 const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli_app = block_uploader_app(SERVICE_VERSION);
     let matches = cli_app.get_matches();
 
     env_logger::init();
-    info!(
-        "Starting the Solana block ingestor (Version: {})",
-        SERVICE_VERSION
-    );
-
-    if matches.is_present("add_empty_tx_metadata_if_missing") {
-        std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
-    }
 
     let num_workers: usize = matches
         .value_of("workers")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(num_cpus::get);
 
-    info!("Using {} worker threads for parallel processing", num_workers);
+    info!(
+        "Starting the Solana block ingestor (Version: {}) with {} runtime threads",
+        SERVICE_VERSION, num_workers
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(num_workers)
+        .enable_all()
+        .build()
+        .context("Failed to build Tokio runtime")?;
+
+    runtime.block_on(async_main(matches, num_workers))
+}
+
+async fn async_main(matches: ArgMatches<'_>, num_workers: usize) -> Result<()> {
+    if matches.is_present("add_empty_tx_metadata_if_missing") {
+        std::env::set_var("ADD_EMPTY_TX_METADATA_IF_MISSING", "1");
+    }
+
+    info!("Using {} worker tasks for parallel processing", num_workers);
 
     let uploader_config = process_uploader_arguments(&matches);
     let cache_config = process_cache_arguments(&matches);
