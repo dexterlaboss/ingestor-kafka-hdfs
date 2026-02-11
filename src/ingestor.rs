@@ -49,17 +49,11 @@ struct WorkItem {
 /// backpressure to prevent unbounded memory growth. Offset commits are
 /// managed by `OffsetTracker` to guarantee no data loss.
 pub struct ParallelIngestor {
-    /// The Kafka consumer (shared for offset commits).
     consumer: Arc<StreamConsumer>,
-    /// Dead-letter queue producer (shared across workers).
     producer: Arc<dyn QueueProducer + Send + Sync>,
-    /// The message processor.
     processor: Arc<dyn Processor + Send + Sync>,
-    /// The message decoder.
     decoder: Arc<dyn MessageDecoder + Send + Sync>,
-    /// Offset tracker for safe commits.
     offset_tracker: Arc<OffsetTracker>,
-    /// Number of worker tasks.
     num_workers: usize,
 }
 
@@ -108,8 +102,6 @@ impl ParallelIngestor {
         );
 
         // Create a bounded channel for work distribution.
-        // async-channel supports multiple receivers natively
-        // Buffer size is workers * 2 to allow some prefetching while maintaining backpressure.
         let (tx, rx) = async_channel::bounded::<WorkItem>(self.num_workers * 2);
 
         let mut worker_handles = Vec::with_capacity(self.num_workers);
