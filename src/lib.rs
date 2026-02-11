@@ -11,7 +11,7 @@ pub mod hbase;
 pub mod ledger_storage;
 pub mod message_decoder;
 pub mod offset_tracker;
-pub mod parallel_ingestor;
+pub mod ingestor;
 pub mod queue_consumer;
 pub mod queue_producer;
 pub mod record_stream;

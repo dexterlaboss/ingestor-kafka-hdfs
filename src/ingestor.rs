@@ -1,6 +1,6 @@
 //! Multi-threaded Kafka ingestor with parallel message processing.
 //!
-//! This module provides `ParallelIngestor`, which consumes messages from Kafka
+//! This module provides `Ingestor`, which consumes messages from Kafka
 //! and dispatches them to a pool of worker tasks for parallel processing.
 //! Offset commits are handled safely via the `OffsetTracker` to ensure no data loss.
 //!
@@ -48,7 +48,7 @@ struct WorkItem {
 /// Uses a bounded channel to dispatch work to a pool of workers, with
 /// backpressure to prevent unbounded memory growth. Offset commits are
 /// managed by `OffsetTracker` to guarantee no data loss.
-pub struct ParallelIngestor {
+pub struct Ingestor {
     consumer: Arc<StreamConsumer>,
     producer: Arc<dyn QueueProducer + Send + Sync>,
     processor: Arc<dyn Processor + Send + Sync>,
@@ -57,7 +57,7 @@ pub struct ParallelIngestor {
     num_workers: usize,
 }
 
-impl ParallelIngestor {
+impl Ingestor {
     /// Create a new parallel ingestor.
     ///
     /// # Arguments

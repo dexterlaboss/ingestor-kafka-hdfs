@@ -11,7 +11,7 @@ use {
         format_parser::{FormatParser, NdJsonParser},
         ledger_storage::{LedgerStorage, LedgerStorageConfig},
         message_decoder::{JsonMessageDecoder, MessageDecoder},
-        parallel_ingestor::ParallelIngestor,
+        ingestor::Ingestor,
         queue_consumer::{create_stream_consumer, KafkaConfig},
         queue_producer::KafkaQueueProducer,
     },
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
         message_max_bytes,
     )?;
 
-    let ingestor = ParallelIngestor::new(
+    let ingestor = Ingestor::new(
         consumer,
         kafka_producer,
         file_processor,

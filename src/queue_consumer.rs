@@ -96,7 +96,7 @@ impl Default for KafkaConfig {
     }
 }
 
-/// Creates a raw `StreamConsumer` for use with `ParallelIngestor`.
+/// Creates a raw `StreamConsumer` for use with `Ingestor`.
 ///
 /// This returns an `Arc<StreamConsumer>` that can be shared between the
 /// consumer loop and the offset tracker for manual offset commits.
