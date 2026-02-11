@@ -18,10 +18,9 @@
 use {
     anyhow::Result,
     dashmap::DashMap,
-    log::{error, info},
+    log::{debug, error},
     rdkafka::{
-        consumer::{Consumer, StreamConsumer},
-        TopicPartitionList,
+        TopicPartitionList, consumer::{Consumer, StreamConsumer}
     },
     std::{collections::BTreeSet, sync::Arc},
 };
@@ -145,7 +144,7 @@ impl OffsetTracker {
                         state.completed.retain(|&o| o >= commit_offset);
                         state.last_committed = commit_offset;
 
-                        info!(
+                        debug!(
                             "Committed offset {} for topic {} partition {}",
                             commit_offset, topic, partition
                         );

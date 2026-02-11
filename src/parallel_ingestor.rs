@@ -23,8 +23,8 @@ use {
     anyhow::Result,
     async_channel::{Receiver, Sender},
     bytes::BytesMut,
-    log::{error, info, warn},
-    rdkafka::{consumer::StreamConsumer, Message},
+    log::{debug, error, info, warn},
+    rdkafka::{Message, consumer::StreamConsumer},
     serde_json::json,
     std::sync::Arc,
 };
@@ -240,7 +240,7 @@ async fn worker_loop(
             raw_payload,
         } = work_item;
 
-        info!(
+        debug!(
             "Worker {} processing topic={} partition={} offset={}",
             worker_id, topic, partition, offset
         );
@@ -255,14 +255,7 @@ async fn worker_loop(
             send_to_dead_letter(&*producer, &raw_payload, &e.to_string()).await;
         }
 
-        if let Err(e) = offset_tracker.complete(&topic, partition, offset) {
-            error!(
-                "Worker {} failed to complete offset topic={} partition={} offset={}: {:?}",
-                worker_id, topic, partition, offset, e
-            );
-        }
-
-        info!(
+        debug!(
             "Worker {} completed topic={} partition={} offset={} success={}",
             worker_id,
             topic,
@@ -270,6 +263,13 @@ async fn worker_loop(
             offset,
             result.is_ok()
         );
+
+        if let Err(e) = offset_tracker.complete(&topic, partition, offset) {
+            error!(
+                "Worker {} failed to complete offset topic={} partition={} offset={}: {:?}",
+                worker_id, topic, partition, offset, e
+            );
+        }
     }
 
     info!("Worker {} shutting down", worker_id);
