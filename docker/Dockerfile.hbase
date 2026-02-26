@@ -36,7 +36,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up environment variables for Java
-ENV JAVA_HOME="/usr/lib/jvm/java-8-openjdk-arm64" \
+ARG TARGETARCH
+ENV JAVA_HOME="/usr/lib/jvm/java-8-openjdk-${TARGETARCH}" \
     PATH="$JAVA_HOME/bin:/opt/hbase/bin:$PATH"
 
 # Install HBase
