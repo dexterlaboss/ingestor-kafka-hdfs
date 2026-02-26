@@ -1,25 +1,37 @@
-# docker/Dockerfile.archival-rpc
+FROM rust:1.83-slim-bullseye AS build
 
-FROM ubuntu:22.04
-
-# Install necessary dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
+    apt-utils \
+    software-properties-common \
+    cmake \
+    build-essential \
+    libclang-dev \
+    libudev-dev \
     libssl-dev \
-    ca-certificates \
+    git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+ARG RPC_VERSION=v3.0.2
+
+RUN git clone https://github.com/dexterlaboss/archival-rpc.git --branch ${RPC_VERSION} --depth 1 solana
+WORKDIR /solana
+
+RUN cargo build --release
+
+
+FROM rust:1.83-slim-bullseye
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+    curl \
+    && apt-get update \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/local/bin
 
-# Define environment variables for RPC_VERSION
-ARG RPC_VERSION=2.3.0
-ENV RPC_VERSION=${RPC_VERSION}
+COPY --from=build /solana/target/release/archival-rpc .
 
-# Download archival-rpc binary from GitHub releases
-RUN curl -L -o archival-rpc "https://github.com/dexterlaboss/archival-rpc/releases/download/v${RPC_VERSION}/archival_rpc_v${RPC_VERSION}_linux_amd64" \
-    && chmod +x archival-rpc
+RUN chmod +x archival-rpc
 
-# Set entrypoint
 ENTRYPOINT ["./archival-rpc"]

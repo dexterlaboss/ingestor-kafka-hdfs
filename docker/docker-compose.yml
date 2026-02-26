@@ -42,8 +42,6 @@ services:
       retries: 5
     environment:
       HBASE_CONF_DIR: "/opt/hbase/conf"
-      JAVA_HOME: "/usr/lib/jvm/java-8-openjdk-amd64"
-      PATH: "/usr/lib/jvm/java-8-openjdk-amd64/bin:/opt/hbase/bin:$PATH"
 
   kafka-zookeeper:
     image: 'confluentinc/cp-zookeeper:7.3.1'
@@ -146,6 +144,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.archival-rpc
+      args:
+        - RPC_VERSION=v3.0.2
     container_name: archival-rpc
     depends_on:
 #      setup:
@@ -159,28 +159,17 @@ services:
     networks:
       - app-network
     entrypoint: ["/usr/local/bin/archival-rpc"]
+    command:
+      - --bind-address=0.0.0.0
+      - --rpc-port=8899
+      - --enable-rpc-hbase-ledger-storage
+      - --hdfs-url=hdfs://127.0.0.1:8020
+      - --hdfs-path=/chain-archives/sol-mainnet/blocks-car
+      - --rpc-hbase-address=hbase:9090
+      - --rpc-threads=8
+      - --hash-tx-full-row-keys
     restart: unless-stopped
 
-  # Ingestor-Kafka-HBase
-  ingestor-kafka-hbase:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.ingestor
-    container_name: ingestor-kafka-hbase
-    depends_on:
-#      setup:
-#        condition: service_completed_successfully
-      kafka:
-        condition: service_healthy
-      hbase:
-        condition: service_healthy
-    environment:
-      - HADOOP_ROOT_LOGGER=INFO,console
-    networks:
-      - app-network
-    entrypoint: ["/usr/local/bin/ingestor-kafka-hbase"]
-#    entrypoint: ["ping", "10.0.68.184"]
-    restart: unless-stopped
 
 networks:
   app-network:
