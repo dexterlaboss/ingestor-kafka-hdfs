@@ -2,7 +2,7 @@ use {
     anyhow::{Context, Result},
     hdfs_native::Client,
     ingestor_kafka_hdfs::{
-        block_processor::BlockProcessor,
+        block_processor::{BlockProcessor, BlockProcessorTrait},
         cli::{block_uploader_app, process_cache_arguments, process_uploader_arguments},
         config::Config,
         decompressor::{Decompressor, GzipDecompressor},
@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
     };
     let ledger_storage = LedgerStorage::new_with_config(ledger_storage_config).await;
 
-    let block_processor = BlockProcessor::new(ledger_storage.clone());
+    let block_processor: Box<dyn BlockProcessorTrait + Send + Sync> = Box::new(BlockProcessor::new(ledger_storage.clone()));
     let processor = FileProcessor::new(
         file_storage,
         format_parser.clone(),
