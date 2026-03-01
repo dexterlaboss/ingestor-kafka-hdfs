@@ -1,6 +1,6 @@
 use {
     crate::{
-        block_processor::BlockProcessor,
+        block_processor::{BlockProcessorTrait},
         decompressor::Decompressor,
         file_storage::FileStorage,
         format_parser::FormatParser,
@@ -22,7 +22,7 @@ pub trait Processor {
 pub struct FileProcessor<S> {
     storage: S,
     parser: Arc<dyn FormatParser + Send + Sync>, // Updated to use trait object
-    block_processor: BlockProcessor,
+    block_processor: Box<dyn BlockProcessorTrait + Send + Sync>,
     decompressor: Box<dyn Decompressor + Send + Sync>, // Boxed for dynamic dispatch
 }
 
@@ -53,7 +53,7 @@ where
     pub fn new(
         storage: S,
         parser: Arc<dyn FormatParser + Send + Sync>, // Fixed number of arguments
-        block_processor: BlockProcessor,
+        block_processor: Box<dyn BlockProcessorTrait + Send + Sync>,
         decompressor: Box<dyn Decompressor + Send + Sync>,
     ) -> Self {
         Self {

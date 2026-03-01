@@ -1,6 +1,7 @@
 use {
     crate::ledger_storage::LedgerStorage,
     anyhow::{Context, Result},
+    async_trait::async_trait,
     solana_block_decoder::{block::encoded_block::EncodedConfirmedBlock, convert_block},
     // solana_block_decoder::{
     //     transaction_status::{
@@ -15,6 +16,18 @@ use {
     solana_transaction_status::{EntrySummary, VersionedConfirmedBlockWithEntries},
 };
 
+#[async_trait]
+pub trait BlockProcessorTrait {
+    async fn handle_block(&self, block_id: u64, block: EncodedConfirmedBlock) -> Result<()>;
+
+    async fn handle_block_with_entries(
+        &self,
+        block_id: u64,
+        block: EncodedConfirmedBlock,
+        entries: Vec<EntrySummary>,
+    ) -> Result<()>;
+}
+
 pub struct BlockProcessor {
     storage: LedgerStorage,
 }
@@ -24,8 +37,12 @@ impl BlockProcessor {
         Self { storage }
     }
 
+}
+
+#[async_trait]
+impl BlockProcessorTrait for BlockProcessor {
     /// Takes a block ID and the `EncodedConfirmedBlock`, converts it, and uploads it.
-    pub async fn handle_block(&self, block_id: u64, block: EncodedConfirmedBlock) -> Result<()> {
+    async fn handle_block(&self, block_id: u64, block: EncodedConfirmedBlock) -> Result<()> {
         let options = BlockEncodingOptions {
             transaction_details: TransactionDetails::Full,
             show_rewards: true,
@@ -44,7 +61,7 @@ impl BlockProcessor {
 
     /// Handle a block that already includes entries summaries. If the --write-block-entries flag is
     /// off, we still accept and upload the block, and ignore entries at storage layer.
-    pub async fn handle_block_with_entries(
+    async fn handle_block_with_entries(
         &self,
         block_id: u64,
         block: EncodedConfirmedBlock,
