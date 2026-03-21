@@ -55,6 +55,12 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                        including the 'getConfirmedBlock' API."),
         )
         .arg(
+            Arg::with_name("disable_indexing_progress")
+                .long("disable-indexing-progress")
+                .takes_value(false)
+                .help("Do not save indexing progress in HBase - table used for consistency checks."),
+        )
+        .arg(
             Arg::with_name("enable_full_tx")
                 .long("enable-full-tx")
                 .takes_value(false)
@@ -239,6 +245,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_tx = matches.is_present("disable_tx");
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
     let disable_blocks = matches.is_present("disable_blocks");
+    let disable_indexing_progress = matches.is_present("disable_indexing_progress");
     let enable_full_tx = matches.is_present("enable_full_tx");
     let use_md5_row_key_salt = matches.is_present("use_md5_row_key_salt");
     let hash_tx_full_row_keys = matches.is_present("hash_tx_full_row_keys");
@@ -299,6 +306,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
         disable_tx,
         disable_tx_by_addr,
         disable_blocks,
+        disable_indexing_progress,
         enable_full_tx,
         use_md5_row_key_salt,
         hash_tx_full_row_keys,
