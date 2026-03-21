@@ -2,19 +2,19 @@ use solana_sdk::signature::Signature;
 use xxhash_rust::{xxh3::xxh3_128, xxh32::xxh32};
 use {
     crate::hbase::{Error as HBaseError, HBaseConnection},
+    agave_reserved_account_keys::ReservedAccountKeys,
     dexter_storage_proto_tx::convert::generated,
     log::{debug, error, info},
     memcache::{Client, MemcacheError},
     serde::{Deserialize, Serialize},
     solana_hash::Hash,
+    solana_message::compiled_instruction::CompiledInstruction,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         message::{v0::LoadedAddresses, VersionedMessage},
         pubkey::Pubkey,
         transaction::{TransactionError, VersionedTransaction},
     },
-    agave_reserved_account_keys::ReservedAccountKeys,
-    solana_message::compiled_instruction::CompiledInstruction,
     solana_storage_proto::convert::{entries, tx_by_addr},
     solana_storage_utils::compression::compress_best,
     // extract_memos::extract_and_fmt_memos,
@@ -680,12 +680,12 @@ impl LedgerStorage {
         let mut tasks = vec![];
 
         // Counts of individual data types being uploaded
-        let mut full_tx_count = None;
-        let mut tx_count = None;
+        let mut full_tx_count = self.uploader_config.enable_full_tx.then_some(0u64);
+        let mut tx_count = (!self.uploader_config.disable_tx).then_some(0u64);
         // account <> signature mappings within this block
-        let mut tx_by_addr_count = None;
+        let mut tx_by_addr_count = (!self.uploader_config.disable_tx_by_addr).then_some(0u64);
         // entries within this block
-        let mut entries_count = None;
+        let mut entries_count = (self.uploader_config.write_block_entries).then_some(0u64);
 
         if !full_tx_cells.is_empty() && self.uploader_config.enable_full_tx {
             let conn = self.connection.clone();
