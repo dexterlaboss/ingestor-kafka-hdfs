@@ -22,6 +22,7 @@ echo "create 'blocks', 'x'" | /opt/hbase/bin/hbase shell || echo "INFO: Table 'b
 echo "create 'tx', 'x'" | /opt/hbase/bin/hbase shell || echo "INFO: Table 'tx' already exists, skipping."
 echo "create 'tx-by-addr', 'x'" | /opt/hbase/bin/hbase shell || echo "INFO: Table 'tx-by-addr' already exists, skipping."
 echo "create 'tx_full', 'x'" | /opt/hbase/bin/hbase shell || echo "INFO: Table 'tx_full' already exists, skipping."
+echo "create 'ingestor_indexing_progress', 'x'" | /opt/hbase/bin/hbase shell || echo "INFO: Table 'ingestor_indexing_progress' already exists, skipping."
 
 echo "HBase table creation completed."
 exit 0

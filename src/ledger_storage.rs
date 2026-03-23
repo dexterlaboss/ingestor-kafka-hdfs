@@ -2,19 +2,19 @@ use solana_sdk::signature::Signature;
 use xxhash_rust::{xxh3::xxh3_128, xxh32::xxh32};
 use {
     crate::hbase::{Error as HBaseError, HBaseConnection},
+    agave_reserved_account_keys::ReservedAccountKeys,
     dexter_storage_proto_tx::convert::generated,
     log::{debug, error, info},
     memcache::{Client, MemcacheError},
     serde::{Deserialize, Serialize},
     solana_hash::Hash,
+    solana_message::compiled_instruction::CompiledInstruction,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         message::{v0::LoadedAddresses, VersionedMessage},
         pubkey::Pubkey,
         transaction::{TransactionError, VersionedTransaction},
     },
-    agave_reserved_account_keys::ReservedAccountKeys,
-    solana_message::compiled_instruction::CompiledInstruction,
     solana_storage_proto::convert::{entries, tx_by_addr},
     solana_storage_utils::compression::compress_best,
     // extract_memos::extract_and_fmt_memos,
@@ -219,6 +219,18 @@ struct TransactionInfo {
                 // memo: Option<String>, // Transaction memo
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct IngestorIndexingProgress {
+    pub slot: u64,
+    pub blockhash: String,
+    pub previous_blockhash: String,
+    pub parent_slot: u64,
+    pub full_tx_count: Option<u64>,
+    pub tx_count: Option<u64>,
+    pub tx_by_addr_count: Option<u64>,
+    pub entries_count: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct StoredConfirmedTransactionWithStatusMeta {
     pub slot: Slot,
@@ -292,6 +304,7 @@ pub const TX_TABLE_NAME: &str = "tx";
 pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
 pub const FULL_TX_TABLE_NAME: &str = "tx_full";
 pub const ENTRIES_TABLE_NAME: &str = "entries";
+pub const INDEXING_PROGRESS_TABLE_NAME: &str = "ingestor_indexing_progress";
 pub const DEFAULT_MEMCACHE_ADDRESS: &str = "127.0.0.1:11211";
 pub const DEFAULT_MEMCACHE_TIMEOUT_SECS: u64 = 1;
 
@@ -342,6 +355,7 @@ pub struct UploaderConfig {
     pub disable_tx: bool,
     pub disable_tx_by_addr: bool,
     pub disable_blocks: bool,
+    pub disable_indexing_progress: bool,
     pub enable_full_tx: bool,
     pub blocks_table_name: String,
     pub tx_table_name: String,
@@ -366,6 +380,7 @@ pub struct UploaderConfig {
     pub hbase_write_to_wal: bool,
     pub write_block_entries: bool,
     pub entries_table_name: String,
+    pub indexing_progress_table_name: String,
 }
 
 impl Default for UploaderConfig {
@@ -376,6 +391,7 @@ impl Default for UploaderConfig {
             disable_tx: false,
             disable_tx_by_addr: false,
             disable_blocks: false,
+            disable_indexing_progress: false,
             enable_full_tx: false,
             blocks_table_name: BLOCKS_TABLE_NAME.to_string(),
             tx_table_name: TX_TABLE_NAME.to_string(),
@@ -400,6 +416,7 @@ impl Default for UploaderConfig {
             hbase_write_to_wal: true,
             write_block_entries: false,
             entries_table_name: ENTRIES_TABLE_NAME.to_string(),
+            indexing_progress_table_name: INDEXING_PROGRESS_TABLE_NAME.to_string(),
         }
     }
 }
@@ -662,11 +679,20 @@ impl LedgerStorage {
 
         let mut tasks = vec![];
 
+        // Counts of individual data types being uploaded
+        let mut full_tx_count = self.uploader_config.enable_full_tx.then_some(0u64);
+        let mut tx_count = (!self.uploader_config.disable_tx).then_some(0u64);
+        // account <> signature mappings within this block
+        let mut tx_by_addr_count = (!self.uploader_config.disable_tx_by_addr).then_some(0u64);
+        // entries within this block
+        let mut entries_count = (self.uploader_config.write_block_entries).then_some(0u64);
+
         if !full_tx_cells.is_empty() && self.uploader_config.enable_full_tx {
             let conn = self.connection.clone();
             let full_tx_table_name = self.uploader_config.full_tx_table_name.clone();
             let use_tx_full_compression = self.uploader_config.use_tx_full_compression.clone();
             let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+            full_tx_count = Some(full_tx_cells.len() as u64);
             tasks.push(tokio::spawn(async move {
                 conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
                     full_tx_table_name.as_str(),
@@ -710,6 +736,7 @@ impl LedgerStorage {
             let tx_table_name = self.uploader_config.tx_table_name.clone();
             let use_tx_compression = self.uploader_config.use_tx_compression.clone();
             let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+            tx_count = Some(tx_cells.len() as u64);
             debug!("HBase: spawning tx upload thread");
             tasks.push(tokio::spawn(async move {
                 debug!("HBase: calling put_bincode_cells_with_retry for tx");
@@ -731,6 +758,7 @@ impl LedgerStorage {
             let use_tx_by_addr_compression =
                 self.uploader_config.use_tx_by_addr_compression.clone();
             let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+            tx_by_addr_count = Some(tx_by_addr_cells.iter().map(|(_, addr_txs)| addr_txs.tx_by_addrs.len() as u64).sum());
             debug!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
                 debug!("HBase: calling put_protobuf_cells_with_retry tx-by-addr");
@@ -753,6 +781,7 @@ impl LedgerStorage {
                 let entries_table_name = self.uploader_config.entries_table_name.clone();
                 let use_entries_compression = true; // follow blocks/tx default compressed writes
                 let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+                entries_count = Some(entries.len() as u64);
                 // Convert EntrySummary -> storage proto entries::Entries
                 let entries_cell = (
                     slot_to_key(slot),
@@ -833,6 +862,17 @@ impl LedgerStorage {
 
         let _num_transactions = confirmed_block.transactions.len();
 
+        let ingestor_indexing_progress = IngestorIndexingProgress {
+            slot,
+            blockhash: confirmed_block.blockhash.clone(),
+            previous_blockhash: confirmed_block.previous_blockhash.clone(),
+            parent_slot: confirmed_block.parent_slot,
+            full_tx_count,
+            tx_count,
+            tx_by_addr_count,
+            entries_count,
+        };
+
         // Store the block itself last, after all other metadata about the block has been
         // successfully stored.  This avoids partial uploaded blocks from becoming visible to
         // `get_confirmed_block()` and `get_confirmed_blocks()`
@@ -857,6 +897,23 @@ impl LedgerStorage {
                     error!("HBase: failed to upload block: {:?}", err);
                     err
                 })?;
+        }
+
+        // Mark this block as fully uploaded
+        if !self.uploader_config.disable_indexing_progress {
+            let conn = self.connection.clone();
+            let indexing_progress_table_name = self.uploader_config.indexing_progress_table_name.clone();
+            let indexing_progress_cell = (slot_to_key(slot), ingestor_indexing_progress);
+            conn.put_bincode_cells_with_retry::<IngestorIndexingProgress>(
+                indexing_progress_table_name.as_str(),
+                &[indexing_progress_cell],
+                false,
+                true,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("HBase: failed to upload indexing progress: {:?}", err);
+            })?;
         }
 
         info!("HBase: successfully uploaded block from slot {}", slot);

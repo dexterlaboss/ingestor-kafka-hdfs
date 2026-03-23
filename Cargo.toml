@@ -69,7 +69,7 @@ xxhash-rust = { version = "0.8.12", features = ["xxh3", "xxh32"] }
 
 async-compression = { version = "0.4.18", features = ["tokio", "gzip"] }
 tokio-util = { version = "0.7", features = ["io"] }
-hdfs-native = "0.11"
+hdfs-native = "0.13.3"
 async-trait = "0.1"
 
 #redis = { version = "0.25", features = ["tokio-comp"] }
