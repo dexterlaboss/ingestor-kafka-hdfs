@@ -236,6 +236,12 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                 .takes_value(false)
                 .help("If HBase should skip WAL when writing new data."),
         )
+        .arg(
+            Arg::with_name("disable_tx_filter_block_boundary")
+                .long("disable-tx-filter-block-boundary")
+                .takes_value(false)
+                .help("Disable filters for first/last transactions of blocks in `tx` table."),
+        )
     ;
 }
 
@@ -264,6 +270,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let use_tx_by_addr_compression = !matches.is_present("disable_tx_by_addr_compression");
     let use_tx_full_compression = !matches.is_present("disable_tx_full_compression");
     let hbase_write_to_wal = !matches.is_present("hbase_skip_wal");
+    let disable_tx_filter_block_boundary = matches.is_present("disable_tx_filter_block_boundary");
 
     let filter_tx_full_include_addrs: std::collections::HashSet<Pubkey> =
         values_t!(matches, "filter_tx_full_include_addr", Pubkey)
@@ -325,6 +332,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
         use_tx_by_addr_compression,
         use_tx_full_compression,
         hbase_write_to_wal,
+        disable_tx_filter_block_boundary,
         ..Default::default()
     }
 }
