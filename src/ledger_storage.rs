@@ -381,6 +381,7 @@ pub struct UploaderConfig {
     pub write_block_entries: bool,
     pub entries_table_name: String,
     pub indexing_progress_table_name: String,
+    pub disable_tx_filter_block_boundary: bool,
 }
 
 impl Default for UploaderConfig {
@@ -417,6 +418,7 @@ impl Default for UploaderConfig {
             write_block_entries: false,
             entries_table_name: ENTRIES_TABLE_NAME.to_string(),
             indexing_progress_table_name: INDEXING_PROGRESS_TABLE_NAME.to_string(),
+            disable_tx_filter_block_boundary: false,
         }
     }
 }
@@ -647,6 +649,13 @@ impl LedgerStorage {
                         block_time: confirmed_block.block_time,
                     },
                 ));
+            }
+
+            // Upload block boundary transactions: frequently used by `getSignaturesForAddress`
+            if self.uploader_config.disable_tx_filter_block_boundary
+                && (index == 0 || index as usize == confirmed_block.transactions.len() - 1)
+            {
+                should_skip_tx = false;
             }
 
             if !self.uploader_config.disable_tx && !should_skip_tx {
