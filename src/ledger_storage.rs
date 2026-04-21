@@ -112,6 +112,7 @@ enum TaskType {
     UploadFullTx,
     CacheFullTx,
     UploadEntries,
+    UploadSlotByBlocktime,
 }
 
 #[derive(Debug)]
@@ -210,6 +211,10 @@ fn signature_to_tx_full_key(signature: Signature, use_hash: bool) -> String {
     }
 }
 
+fn blocktime_to_key(blocktime: UnixTimestamp) -> String {
+    format!("{blocktime:016x}")
+}
+
 // A serialized `TransactionInfo` that is stored in the `tx` table
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct TransactionInfo {
@@ -305,6 +310,7 @@ pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
 pub const FULL_TX_TABLE_NAME: &str = "tx_full";
 pub const ENTRIES_TABLE_NAME: &str = "entries";
 pub const INDEXING_PROGRESS_TABLE_NAME: &str = "ingestor_indexing_progress";
+pub const SLOT_BY_BLOCKTIME_TABLE_NAME: &str = "slot_by_blocktime";
 pub const DEFAULT_MEMCACHE_ADDRESS: &str = "127.0.0.1:11211";
 pub const DEFAULT_MEMCACHE_TIMEOUT_SECS: u64 = 1;
 
@@ -357,6 +363,7 @@ pub struct UploaderConfig {
     pub disable_blocks: bool,
     pub disable_indexing_progress: bool,
     pub enable_full_tx: bool,
+    pub enable_slot_by_blocktime: bool,
     pub blocks_table_name: String,
     pub tx_table_name: String,
     pub tx_by_addr_table_name: String,
@@ -381,6 +388,7 @@ pub struct UploaderConfig {
     pub write_block_entries: bool,
     pub entries_table_name: String,
     pub indexing_progress_table_name: String,
+    pub slot_by_blocktime_table_name: String,
     pub disable_tx_filter_block_boundary: bool,
 }
 
@@ -394,6 +402,7 @@ impl Default for UploaderConfig {
             disable_blocks: false,
             disable_indexing_progress: false,
             enable_full_tx: false,
+            enable_slot_by_blocktime: false,
             blocks_table_name: BLOCKS_TABLE_NAME.to_string(),
             tx_table_name: TX_TABLE_NAME.to_string(),
             tx_by_addr_table_name: TX_BY_ADDR_TABLE_NAME.to_string(),
@@ -418,6 +427,7 @@ impl Default for UploaderConfig {
             write_block_entries: false,
             entries_table_name: ENTRIES_TABLE_NAME.to_string(),
             indexing_progress_table_name: INDEXING_PROGRESS_TABLE_NAME.to_string(),
+            slot_by_blocktime_table_name: SLOT_BY_BLOCKTIME_TABLE_NAME.to_string(),
             disable_tx_filter_block_boundary: false,
         }
     }
@@ -810,6 +820,30 @@ impl LedgerStorage {
                     .map_err(|e| TaskErrorWithType::new(TaskType::UploadEntries, e))
                 }));
             }
+        }
+
+        if self.uploader_config.enable_slot_by_blocktime {
+            let conn = self.connection.clone();
+            let slot_by_blocktime_table_name = self.uploader_config.slot_by_blocktime_table_name.clone();
+            let write_to_wal = self.uploader_config.hbase_write_to_wal;
+            let key = format!(
+                "{}/{}",
+                blocktime_to_key(confirmed_block.block_time.unwrap_or(0)),
+                slot_to_key(slot),
+            );
+
+            tasks.push(tokio::spawn(async move {
+                let slot_by_blocktime_cell = (&key, vec![("bin".to_string(), vec![])]);
+                conn.put_row_data_with_retry(
+                    slot_by_blocktime_table_name.as_str(),
+                    "x",
+                    &[slot_by_blocktime_cell],
+                    write_to_wal
+                )
+                .await
+                .map(|_| TaskResult::BytesWritten(0))
+                .map_err(|e| TaskErrorWithType::new(TaskType::UploadSlotByBlocktime, e))
+            }));
         }
 
         let mut _bytes_written = 0;
