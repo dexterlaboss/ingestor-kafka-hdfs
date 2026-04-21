@@ -68,6 +68,13 @@ pub fn block_uploader_app<'a>(version: &'a str) -> App<'a, 'a> {
                        including the 'getConfirmedBlock' API."),
         )
         .arg(
+            Arg::with_name("enable_slot_by_blocktime")
+                .long("enable-slot-by-blocktime")
+                .takes_value(false)
+                .help("Enable indexing of slot-by-blocktime mappings \
+                       which allow finding slots by blocktime."),
+        )
+        .arg(
             Arg::with_name("use_md5_row_key_salt")
                 .long("use-md5-row-key-salt")
                 .takes_value(false)
@@ -253,6 +260,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_blocks = matches.is_present("disable_blocks");
     let disable_indexing_progress = matches.is_present("disable_indexing_progress");
     let enable_full_tx = matches.is_present("enable_full_tx");
+    let enable_slot_by_blocktime = matches.is_present("enable_slot_by_blocktime");
     let use_md5_row_key_salt = matches.is_present("use_md5_row_key_salt");
     let hash_tx_full_row_keys = matches.is_present("hash_tx_full_row_keys");
     let filter_program_accounts = matches.is_present("filter_tx_by_addr_programs");
@@ -315,6 +323,7 @@ pub fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
         disable_blocks,
         disable_indexing_progress,
         enable_full_tx,
+        enable_slot_by_blocktime,
         use_md5_row_key_salt,
         hash_tx_full_row_keys,
         filter_program_accounts,

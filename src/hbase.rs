@@ -137,6 +137,31 @@ impl HBaseConnection {
         )
         .await
     }
+
+    pub async fn put_row_data_with_retry(
+        &self,
+        table_name: &str,
+        family_name: &str,
+        row_data: &[(&RowKey, RowData)],
+        use_wal: bool,
+    ) -> Result<()> {
+        retry_notify(
+            ExponentialBackoff::default(),
+            || async {
+                let mut client = self.client();
+                Ok(client
+                    .put_row_data(table_name, family_name, row_data, use_wal)
+                    .await?)
+            },
+            |err, _dur| {
+                error!(
+                    "HBase: put_row_data_with_retry failed with error: {}",
+                    err
+                );
+            },
+        )
+        .await
+    }
 }
 
 type InputTransport = TBufferedReadTransport<thrift::transport::ReadHalf<TTcpChannel>>;
